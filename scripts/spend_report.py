@@ -43,17 +43,24 @@ def load_manifests() -> list[dict]:
             m = json.loads(f.read_text())
         except json.JSONDecodeError:
             continue
-        p = m.get("provider", {})
+        # Two manifest shapes exist: harness runs (provider + stages) and one-off
+        # experiments (flat). A ledger that silently skipped the second shape would
+        # under-report spend, which is the exact failure this script exists to prevent.
+        p = m.get("provider") or {
+            "backend": "vertex" if m.get("project") else "?",
+            "location": m.get("location", "-"),
+            "model": m.get("model", "-"),
+        }
         stages = m.get("stages", [])
-        requests = sum(s.get("requests", 0) for s in stages)
+        requests = sum(s.get("requests", 0) for s in stages) or m.get("requests", 0)
         rows.append(
             {
-                "label": m.get("label", f.stem),
+                "label": m.get("label") or m.get("experiment") or f.stem,
                 "backend": p.get("backend", "?"),
                 "location": p.get("location", "-"),
                 "model": p.get("model", "-"),
                 "requests": requests,
-                "cost": m.get("actual_usd", 0.0),
+                "cost": m.get("actual_usd", m.get("modelled_cost_usd", 0.0)),
                 "tokens_in": sum(s.get("tokens", {}).get("input", 0) for s in stages),
                 "tokens_out": sum(s.get("tokens", {}).get("output", 0) for s in stages),
             }
@@ -92,7 +99,7 @@ def main() -> None:
     print(f"  {'run':<18} {'backend':<10} {'location':<14} {'req':>6} {'in tok':>9} {'out tok':>9} {'cost':>11}")
     for r in rows:
         print(
-            f"  {r['label']:<18} {r['backend']:<10} {r['location']:<14} {r['requests']:>6} "
+            f"  {r["label"]:<26} {r['backend']:<10} {r['location']:<14} {r['requests']:>6} "
             f"{r['tokens_in']:>9,} {r['tokens_out']:>9,} {r['cost']:>11.6f}"
         )
 

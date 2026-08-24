@@ -61,10 +61,14 @@ class Behavior:
     retry_after_s: float = 1.0
     seed: int | None = None
 
-    # Grounding: live search adds a round trip to the search backend before
-    # generation, so it is slower, and it enlarges the prompt with retrieved context.
-    grounding_latency_s: float = 1.2
-    grounding_prompt_token_multiplier: float = 6.0
+    # Grounding: calibrated against 20 paired real Vertex requests (see FINDINGS 0c).
+    # An earlier version of this mock assumed retrieved passages were billed as prompt
+    # tokens (6x inflation). Measurement falsified that: input tokens are *identical*
+    # grounded or not, so retrieval is priced entirely in the per-prompt SKU. What does
+    # change is the answer: grounded responses ran 1.9x longer, which is what drives
+    # the truncation risk.
+    grounding_latency_s: float = 2.4
+    grounding_output_token_multiplier: float = 1.9
 
     # Token generation model
     prompt_tokens_per_char: float = 0.27
@@ -241,11 +245,7 @@ def create_app(behavior: Behavior | None = None) -> FastAPI:
                 thinking_budget = -1
 
             prompt_tokens = max(1, int(len(text_in) * b.prompt_tokens_per_char))
-            if grounded:
-                # Retrieved passages are prepended to the prompt, so input tokens grow
-                # substantially. This is why grounding costs more than its SKU fee
-                # alone.
-                prompt_tokens = int(prompt_tokens * b.grounding_prompt_token_multiplier)
+
             wanted = max(1, int(rng.gauss(b.output_tokens_mean, b.output_tokens_sigma)))
 
             # The headline quirk: thinking and visible output share one allowance. A
@@ -377,7 +377,7 @@ def create_app(behavior: Behavior | None = None) -> FastAPI:
 def build_behavior_from_env() -> Behavior:
     b = Behavior()
     float_fields = (
-        "grounding_latency_s", "grounding_prompt_token_multiplier",
+        "grounding_latency_s", "grounding_output_token_multiplier",
         "base_latency_s", "latency_sigma", "per_output_token_s", "inflation_factor",
         "rate_limit_probability", "server_error_probability", "empty_probability",
         "safety_probability", "truncate_probability", "retry_after_s",

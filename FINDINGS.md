@@ -155,6 +155,9 @@ Grounding bills per grounded prompt, not in tokens. At published rates (~$25 per
 | **Grounded** | **$0.025288** | **$2.53** |
 | Ratio | **88x** | 88x |
 
+*(Modelled at the assumed rate. Measured below the ratio came out at 63x, because
+grounded answers are longer and so carry more token cost of their own.)*
+
 **This inverts the cost model in §6c.** Every token lever there — thinking off, Batch
 API, context caching — discounts *tokens*. None of them touch the grounding SKU. Once
 grounding is enabled, tokens are roughly 1% of the bill and the entire optimisation
@@ -166,8 +169,98 @@ grounded condition need 100 samples, or would fewer suffice given its answers ar
 already anchored to retrieved sources? And how far does the free monthly allowance
 (~5,000 grounded prompts) go?
 
-I have not measured this. **It is the single largest open question in this document**,
-and it is a cost question rather than an engineering one.
+**Measured, 2026-08-24.** 20 prompts, each asked in both conditions, paired so every
+delta is within-prompt. Vertex `us-central1`, `gemini-2.5-flash`, thinking off, 512
+token cap. Cost $0.52. Raw data in `results/real/grounding-*.jsonl`.
+
+| | Ungrounded | Grounded | |
+|---|---|---|---|
+| Mean input tokens | 35.2 | **35.2** | **1.00x** |
+| Mean output tokens | 160.7 | 299.4 | 1.86x |
+| p50 latency | 2,023 ms | 4,432 ms | 2.19x |
+| p95 latency | 3,256 ms | **10,076 ms** | 3.09x |
+| Truncated at 512 | 0 / 20 | **10 / 20** | — |
+| Answers carrying sources | 0 | 20 / 20 | — |
+| Modelled cost | $0.0082 | $0.5152 | 63x |
+
+### Three things I got wrong, corrected by the measurement
+
+**1. Retrieved passages are not billed as prompt tokens.** My mock assumed roughly 6x
+input inflation, reasoning that retrieved context must be prepended to the prompt.
+**Input tokens are identical to the byte — 35.2 in both conditions.** Retrieval is
+priced entirely in the per-prompt SKU and nowhere else. The mock has been corrected.
+This makes grounded cost *easier* to forecast than I expected: it is a flat adder per
+prompt, invariant to how much the model read.
+
+**2. Truncation is the real operational risk, not cost inflation.** Grounded answers
+run 1.86x longer because they synthesise several sources. At the 512-token cap that
+§6d validated for ungrounded traffic, **half of all grounded answers were cut off**.
+Ungrounded truncated zero. A grounded run at 512 tokens is not a more expensive
+version of the ungrounded run; it is a **differently broken** one, and the breakage is
+silent — HTTP 200, billed in full, answer ends mid-sentence. Grounded traffic needs
+its own cap; 1,536 is the obvious starting point but I have not measured where it
+settles.
+
+**3. Latency is the constraint that actually bites.** p95 went from 3.3s to 10.1s. The
+grounded request does a live search round trip before generation, and that round trip
+is not under anyone's control. Any timeout tuned on ungrounded traffic will fire on
+grounded traffic. The concurrency ceiling of 128 from §6g was measured ungrounded; a
+3x latency increase means the same pool sustains roughly a third the throughput.
+
+### Grounding changes the answer, which is the whole point
+
+Restricting to the 6 prompt pairs where both conditions named an unambiguous brand as
+their top pick, **5 of 6 changed**:
+
+| Category | Ungrounded #1 | Grounded #1 |
+|---|---|---|
+| Electric toothbrushes | Philips Sonicare DiamondClean | **Oral-B Pro 1000** |
+| Wireless earbuds | Sony WF-1000XM5 | **Bose QuietComfort Ultra** |
+| Cast iron skillets | Lodge | **Field Company** |
+| Dash cams | Viofo A129 Pro Duo | **Nextbase iQ** |
+| Carry-on luggage | Monos Carry-On Plus | **Travelpro Platinum Elite** |
+| Espresso machines | Breville Barista Express | Breville Barista Express *(same)* |
+
+N=6 is small and I am not claiming a rate. What it does establish is that **the two
+conditions are not noisy variants of each other** — they routinely disagree on the
+single most valuable slot in the output. That is the product working as intended, and
+it is why both conditions have to be run rather than one inferred from the other.
+
+### A warning about the extraction pipeline
+
+The brand extractor I wrote for this experiment produced a Jaccard overlap of 0.22,
+and **that number is not trustworthy** — inspection showed it was picking up "Pro",
+"Value", "Options" and "Known" as brands. I am reporting it only to explain why I
+discarded it.
+
+But the reason it failed is itself a finding. **Grounded answers change shape, not
+just content**: 14 of 20 came back as structured listicles with numbered section
+headers ("1. Types of Office Chairs", "Budget-Friendly Options"), against a mean
+answer length of 1,297 characters versus 658 ungrounded. A brand-extraction pipeline
+tuned on ungrounded prose will systematically misparse grounded output, and it will
+fail *quietly* by returning section headers that look like brand names. If Evertune
+diffs the two conditions, extraction has to be validated separately on each.
+
+### Citations do not identify the publisher
+
+All 145 returned sources were `vertexaisearch.cloud.google.com/grounding-api-redirect/...`
+URLs — 7.2 per answer, from 4.5 distinct search queries per prompt. **Not one exposed
+the publisher domain directly.** For a product that tracks brand visibility, "which
+sites is the model reading" is a first-class question, and answering it requires
+resolving every redirect as a separate step. These redirect URLs are also widely
+reported to expire, so resolution has to happen at collection time or the provenance
+is lost permanently. `grounding_sources` captures them; resolving them is not
+implemented and is listed in §9.
+
+### What is still unverified
+
+The $25/1k rate is still an assumption. This run billed 20 grounded prompts, which is
+recorded in the manifest specifically so it can be reconciled against the
+"Grounding with Google Search" SKU in the billing console. That reconciliation has not
+happened yet — it needs ~24h for billing to settle — and it is the one number here
+that comes from the open web rather than from measurement. If the real rate is $14,
+every grounded figure in this document drops by 44%; the engineering conclusions do
+not move.
 
 ### What the code now does
 
@@ -1386,11 +1479,24 @@ makes the boundary observable; neither soak ran long enough to cross it.
 
 ## 9. Open questions and things still to confirm
 
-**Grounding economics (largest open item).** At a claimed ~$25/1k grounded prompts, a
-grounded request costs 88x an ungrounded one, and no token optimisation touches it.
-Confirming the real rate against an invoice, and establishing whether the grounded
-condition needs the same 100 samples as the ungrounded one, is worth more than every
-other cost lever in this document combined. See §0c.
+**Grounding rate reconciliation.** §0c billed 20 grounded prompts on 2026-08-24 and
+recorded the count in its manifest. Comparing that against the "Grounding with Google
+Search" SKU in the billing console settles $14 vs $25 and reveals whether the free
+monthly allowance (~5,000 prompts) applied first. Everything else in §0c is measured;
+this is the one assumed number.
+
+**Grounded output cap.** Half of all grounded answers truncated at 512 tokens. 1,536
+is a guess. The right cap needs the same treatment §6d gave the ungrounded cap.
+
+**Sample count under grounding.** Ungrounded sampling explores the model's own
+distribution, so 100 samples is well motivated. Grounded answers are anchored to
+retrieved sources and may vary less, in which case the grounded arm could run fewer
+samples for most of the cost saving available. Measuring answer entropy across N
+grounded samples of one prompt would settle it; I have not done this.
+
+**Redirect resolution.** All 145 citations were opaque Google redirect URLs. Resolving
+them to publisher domains is unimplemented, and the URLs are reported to expire, so it
+has to happen at collection time.
 
 ### Answered by Evertune
 
