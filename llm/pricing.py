@@ -17,12 +17,27 @@ from dataclasses import dataclass
 class ModelPricing:
     input_per_1m: float
     output_per_1m: float
+    # Cache hits bill at a fraction of the input rate. Implicit caching is on by
+    # default for Gemini 2.5, so this discount can apply without anyone opting in --
+    # which means charging every prompt token at full rate silently *overstates* cost.
+    cached_input_multiplier: float = 0.10
     note: str = ""
 
-    def cost(self, input_tokens: int, output_tokens: int) -> float:
-        """Cost in USD. ``output_tokens`` must already include thinking tokens."""
+    def cost(
+        self, input_tokens: int, output_tokens: int, cached_tokens: int = 0
+    ) -> float:
+        """Cost in USD.
+
+        ``output_tokens`` must already include thinking tokens. ``cached_tokens`` is
+        the portion of ``input_tokens`` served from cache, and is discounted rather
+        than double counted.
+        """
+        cached = max(0, min(cached_tokens, input_tokens))
+        fresh = input_tokens - cached
         return (
-            input_tokens * self.input_per_1m + output_tokens * self.output_per_1m
+            fresh * self.input_per_1m
+            + cached * self.input_per_1m * self.cached_input_multiplier
+            + output_tokens * self.output_per_1m
         ) / 1_000_000
 
 
@@ -56,5 +71,7 @@ def pricing_for(model: str | None) -> ModelPricing:
     return _FALLBACK
 
 
-def cost_usd(model: str | None, input_tokens: int, output_tokens: int) -> float:
-    return pricing_for(model).cost(input_tokens, output_tokens)
+def cost_usd(
+    model: str | None, input_tokens: int, output_tokens: int, cached_tokens: int = 0
+) -> float:
+    return pricing_for(model).cost(input_tokens, output_tokens, cached_tokens)

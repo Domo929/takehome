@@ -342,3 +342,32 @@ async def test_retried_request_attributes_time_correctly(fake_vertex):
     # And what is left over for us must be small: this path does almost nothing.
     ours = total_ms - accounted
     assert ours < 100.0, f"unattributed time {ours:.1f}ms is implausibly large"
+
+
+def test_cached_input_tokens_are_discounted_not_double_charged():
+    """Cache hits bill at a fraction of the input rate.
+
+    Implicit caching is on by default for Gemini 2.5, so a workload with a repeated
+    system prompt can be getting this discount without anyone enabling it. Charging
+    every prompt token at full rate overstates spend, which is the mirror image of
+    the thinking-token bug that understates it.
+    """
+    from llm.pricing import cost_usd, pricing_for
+
+    pricing = pricing_for("gemini-2.5-flash")
+    full = cost_usd("gemini-2.5-flash", input_tokens=1000, output_tokens=0)
+    all_cached = cost_usd(
+        "gemini-2.5-flash", input_tokens=1000, output_tokens=0, cached_tokens=1000
+    )
+    assert all_cached == pytest.approx(full * pricing.cached_input_multiplier)
+
+    half = cost_usd(
+        "gemini-2.5-flash", input_tokens=1000, output_tokens=0, cached_tokens=500
+    )
+    assert full > half > all_cached
+
+    # Cached can never exceed prompt tokens, and must not produce a negative charge.
+    absurd = cost_usd(
+        "gemini-2.5-flash", input_tokens=100, output_tokens=0, cached_tokens=99999
+    )
+    assert absurd > 0

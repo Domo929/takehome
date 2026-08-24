@@ -325,6 +325,10 @@ class Gemini(LLM):
         input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
         visible = int(getattr(usage, "candidates_token_count", 0) or 0)
         thinking = int(getattr(usage, "thoughts_token_count", 0) or 0)
+        # Portion of the prompt served from cache. Billed at a fraction of the input
+        # rate, and implicit caching is enabled by default on Gemini 2.5, so ignoring
+        # this overstates spend on any workload with a repeated system prompt.
+        cached = int(getattr(usage, "cached_content_token_count", 0) or 0)
 
         # Billed output is visible + thinking. Falling back to total-minus-prompt keeps
         # accounting honest if the SDK omits a component, but the explicit sum avoids
@@ -357,8 +361,10 @@ class Gemini(LLM):
         if traffic_type is not None:
             # Reveals whether the request drew on on-demand or provisioned quota.
             metadata["traffic_type"] = getattr(traffic_type, "name", str(traffic_type))
+        if cached:
+            metadata["cached_input_tokens"] = cached
 
-        cost = cost_usd(self._model, input_tokens, output_tokens)
+        cost = cost_usd(self._model, input_tokens, output_tokens, cached)
 
         return GeminiResponse(
             answer=answer,
@@ -388,6 +394,9 @@ class Gemini(LLM):
         tokens_total.labels(**labels, kind="input").inc(parsed.input_tokens)
         tokens_total.labels(**labels, kind="output").inc(parsed.output_tokens)
         tokens_total.labels(**labels, kind="thinking").inc(parsed.thinking_tokens)
+        tokens_total.labels(**labels, kind="cached_input").inc(
+            parsed.metadata.get("cached_input_tokens", 0)
+        )
         spend_usd_total.labels(**labels).inc(parsed.cost_usd or 0.0)
 
     def _observe(self, error: LLMError | None, rtt_s: float) -> None:
