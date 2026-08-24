@@ -287,6 +287,127 @@ Turning it off is still right — it simply is not the axis being measured.
 
 ---
 
+## 0d. One production unit, measured
+
+Everything else in this document fires *different* prompts, because that is what a
+throughput harness wants. Evertune's actual unit of work is the opposite: **one prompt,
+sampled 100 times, run in both conditions**. 100 is a settled methodological choice,
+not a parameter to tune, so the question is not "how many samples" but "what do 100
+samples of one prompt actually look like".
+
+So I ran exactly one unit. Same prompt, 100 grounded + 100 ungrounded, concurrency 25,
+1,536-token cap, `us-central1`. **$2.67.** Raw data in
+`results/real/production-unit-*.jsonl`.
+
+| | Ungrounded | Grounded | |
+|---|---|---|---|
+| p50 latency | 1,613 ms | 5,909 ms | 3.7x |
+| p95 latency | 2,676 ms | 11,151 ms | 4.2x |
+| p99 latency | 4,592 ms | 13,722 ms | 3.0x |
+| Mean output tokens | 119.6 | 549.1 | 4.6x |
+| Truncated at 1,536 | 0 / 100 | **1 / 100** | — |
+| Rate-limited | 0 | **0** | — |
+| Retried | 0 | 0 | — |
+| Silently degraded | 0 | **0** | — |
+| Cost | $0.031 | **$2.638** | 86x |
+
+### The product signal is large, and 100 samples makes it solid
+
+This is the payoff. Brand mention frequency, out of 100 samples each:
+
+| Brand | Ungrounded | Grounded | Shift |
+|---|---|---|---|
+| **Dreame** | 5 | **97** | **+92** |
+| **Narwal** | 0 | **36** | **+36** |
+| Ecovacs | 52 | 93 | +41 |
+| Eufy | 65 | 99 | +34 |
+| Shark | 56 | 80 | +24 |
+| Dyson | 0 | 19 | +19 |
+| Xiaomi | 0 | 14 | +14 |
+| Samsung | 6 | 33 | +27 |
+| **Anker** | 18 | **0** | **−18** |
+| **Neato** | 11 | **0** | **−11** |
+| Wyze | 7 | 0 | −7 |
+| Roomba / iRobot / Roborock | ~100 | ~90 | flat |
+
+Dreame appears in **5% of ungrounded samples and 97% of grounded ones**. Narwal and
+Dyson do not exist in the model's unaided beliefs at all and are solidly present once
+it can search. In the other direction, **Neato went bankrupt in 2023** and Anker's
+robot vacuum line is marketed as Eufy — both appear only in the ungrounded condition.
+
+That is the two conditions doing exactly what they are supposed to do: one reports what
+the model absorbed during training, the other reports what the live web says now. The
+gap between them is not noise, it is the measurement, and at n=100 these are not
+fragile numbers.
+
+It also means the ungrounded condition is **not** a degraded version of the grounded
+one. It carries genuine signal about model beliefs, including stale beliefs about a
+company that no longer exists.
+
+### Citation URLs are unique per request, so sources cannot be compared
+
+I set out to measure whether the 100 samples retrieve the same web, and got mean
+pairwise source overlap of **0.000** — no two samples shared a single citation.
+
+**That number is an artifact and I am not reporting it as a finding.** All 852 returned
+URLs were distinct because Vertex returns per-request signed redirect tokens
+(`vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ...`). The same
+publisher cited by two samples gets two different URLs.
+
+The real finding is worse than the one I was looking for: **source-level comparison is
+impossible from the API response alone.** Not hard, impossible. Every cross-sample
+question about provenance — which publishers drive a brand's visibility, whether a
+share shift came from a new source appearing — requires resolving all 852 redirects
+first, and those redirects are widely reported to expire. For a product built on
+tracking brand visibility over time, provenance has to be resolved **at collection
+time** or it is gone permanently.
+
+### Retrieval does vary, measured where it can be measured
+
+Search queries are returned as plain text, so they *can* be compared:
+
+| | |
+|---|---|
+| Searches issued for 100 identical prompts | **428** |
+| Distinct query strings | **154** |
+| Most common query | 64 / 100 samples |
+| Mean pairwise query-set overlap | 0.087 |
+
+So retrieval is neither stable nor chaotic. A dominant query
+(`best robot vacuum brands 2024 2025`) appears in about two thirds of samples, but each
+sample issues ~4.3 searches and the *combination* differs almost every time. The spread
+of grounded answers therefore mixes generation variance with retrieval variance, and
+the two are not separable from the response.
+
+That is not a defect, but it is a property worth stating: **the grounded condition is a
+noisier instrument than the ungrounded one**, and its noise floor is set by Google's
+retrieval, which is outside anyone's control.
+
+### There is no dedup discount
+
+100 identical prompts issued 428 searches across 154 distinct query strings. Nothing
+was reused. A production unit costs the **full 100x** grounding SKU — **$2.53 per
+prompt measured**, against $0.03 for the ungrounded arm.
+
+### 1,536 tokens is the right cap for grounded traffic
+
+§0c measured **50% truncation at 512**. At 1,536 it is **1%**. Grounded answers average
+549 output tokens against 120 ungrounded, so the cap has to roughly triple when
+grounding is on. This closes an open question that §0c could only guess at.
+
+### What did not happen
+
+**No rate limiting.** 100 grounded prompts at concurrency 25 produced zero 429s and
+zero retries, so there is no separately-enforced search quota biting at this scale. I
+would not extrapolate far — one burst of 100 is a small probe — but the obvious
+production pattern does not trip anything.
+
+**No silent degradation.** Every one of the 100 grounded requests came back actually
+grounded. The `grounding_degraded` counter added earlier stayed at zero, which is the
+result I wanted and not one I could have assumed.
+
+---
+
 ## 1. The model retires 2026-10-16 — noted, not blocking
 
 Gemini 2.5 Flash on Vertex is scheduled for retirement on **2026-10-16**, confirmed
@@ -1523,18 +1644,28 @@ Search" SKU in the billing console settles $14 vs $25 and reveals whether the fr
 monthly allowance (~5,000 prompts) applied first. Everything else in §0c is measured;
 this is the one assumed number.
 
-**Grounded output cap.** Half of all grounded answers truncated at 512 tokens. 1,536
-is a guess. The right cap needs the same treatment §6d gave the ungrounded cap.
+~~**Grounded output cap.**~~ **Answered in §0d:** 1,536 gives 1% truncation against
+50% at 512. Grounded answers average 549 output tokens versus 120 ungrounded.
 
-**Sample count under grounding.** Ungrounded sampling explores the model's own
-distribution, so 100 samples is well motivated. Grounded answers are anchored to
-retrieved sources and may vary less, in which case the grounded arm could run fewer
-samples for most of the cost saving available. Measuring answer entropy across N
-grounded samples of one prompt would settle it; I have not done this.
+~~**Sample count under grounding.**~~ **Withdrawn.** I had this as a cost lever, on
+the theory that grounded answers anchored to retrieved sources might vary less and so
+need fewer samples. Two things killed it. 100 is a settled methodological choice at
+Evertune, not a parameter. And §0d shows grounded answers vary *more*, not less: 100
+identical prompts issued 428 searches across 154 distinct query strings, so the
+grounded condition carries retrieval variance on top of generation variance.
 
-**Redirect resolution.** All 145 citations were opaque Google redirect URLs. Resolving
-them to publisher domains is unimplemented, and the URLs are reported to expire, so it
-has to happen at collection time.
+**Redirect resolution (upgraded to a blocker for provenance).** §0d found the
+citation URLs are not merely opaque, they are **unique per request**: 852 URLs across
+100 samples, zero repeats, because Vertex signs a fresh redirect token each time. Any
+cross-sample question about which publishers drive a brand's visibility requires
+resolving every redirect, and the tokens expire. This has to happen at collection time
+or the provenance is gone. Unimplemented, and the largest remaining engineering gap.
+
+**Does retrieval variance move brand share?** §0d establishes that retrieval varies
+(154 distinct queries for one prompt) and that the grounded condition names very
+different brands. It does not separate the two: how much of a grounded brand share is
+the model versus which pages happened to be retrieved. Re-running the same unit on a
+later day would begin to answer it.
 
 ### Answered by Evertune
 
