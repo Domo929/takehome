@@ -656,17 +656,72 @@ prototype.
 
 ---
 
-## 9. What is not yet proven
+## 9. Open questions and things still to confirm
 
-I would rather be explicit than imply coverage I do not have. Against a real endpoint,
-still unmeasured:
+Split by who can answer. I have tried to state what each answer would actually change,
+since a question that does not change a decision is not worth anyone's time.
 
-- actual Vertex throughput ceiling and where 429s begin
-- real p99 under sustained load, and tail behavior at the knee
-- true thinking-token cost and latency multiplier on real content
-- safety-filter false-positive rate on competitor and brand prompts
-- `temperature=0` determinism (reported elsewhere as non-deterministic; worth verifying)
-- whether `global` and regional endpoints differ in absorbed load
+### For Evertune — answers that change the design
 
-The harness, metrics, dashboards, and cost governor for all of these are built and
-validated end to end. They need credentials, not code.
+| # | Question | What changes |
+|---|---|---|
+| 1 | **Would `responseSchema` (structured JSON) replace the downstream LLM parser?** | Potentially removes an entire model call from the pipeline — a larger saving than every tuning lever in §6c combined. Also makes truncation detectable as malformed JSON rather than as a plausible short list. Changes the response contract, so it is a product decision. |
+| 2 | **Are logprobs load-bearing?** `together.py` requests `logprobs=1` and never reads the result. | If mention *confidence* matters downstream, the provider surface has to carry it. Vertex supports `response_logprobs`/`logprobs` with quota caveats, so this is not free. |
+| 3 | **Does a duplicate answer cause harm?** | We retry on 429 and 5xx. If a retry lands after the original in fact succeeded, does double-counting a brand mention corrupt results? Decides whether idempotency keys are required. |
+| 4 | **Is the 2026-10-16 retirement of 2.5 Flash planned for?** | Seven weeks. If there is no migration scheduled, this should probably target Gemini 3 Flash instead, and the provider is built so that is a config change. |
+| 5 | **Is `LLM.SimpleResponse` a fixed contract?** | I treated it as immutable and extended by subclass (§2). If it is in fact ours to change, promoting `finish_reason` onto the base type is the cleaner design and Together needs it too. |
+| 6 | **Is up-to-24-hour batch turnaround acceptable?** | The Batch API is a straight 2x cost reduction and the single clearest win available (§6c). "Batch" was confirmed, but turnaround tolerance was not. |
+| 7 | **What counts as a correct answer?** | Needed to run a quality evaluation at all. Right now `thinking_budget=0` is justified on cost alone; without a correctness measure I cannot claim quality is unaffected. |
+| 8 | **Any region or data-residency constraints?** | Decides whether the `global` endpoint is usable, which affects both available capacity and latency. |
+
+### For Evertune — access we need
+
+| # | Ask | Why |
+|---|---|---|
+| 9 | **A Vertex project with `aiplatform.googleapis.com` enabled** | Everything in §9's "not yet proven" list below is blocked on this. All current live numbers are Developer API (§0). |
+| 10 | **A spend ceiling we are authorised to use** | The harness is budget-capped and refuses to start without `--confirm`; I would rather be told the number than guess it. |
+
+### Things I would verify myself, given a Vertex project
+
+Ordered by how load-bearing the current claims are:
+
+1. **Real throughput ceiling and where 429s begin.** Everything about Vertex capacity
+   is currently unmeasured. The harness runs unchanged.
+2. **Whether Dynamic Shared Quota actually moves.** The adaptive limiter (§6b) is
+   justified by capacity varying; the experiment simulated that by reconfiguring a
+   fake backend. If DSQ turns out stable for a single tenant, the honest
+   recommendation is to leave adaptive limiting off and use a tuned constant.
+3. **Batch pricing against a real invoice.** §6c uses Google's published rates. The
+   relative ordering is robust; the absolute figures are not verified.
+4. **Context cache hit rate in practice.** Implicit caching is on by default and the
+   provider now reads `cached_content_token_count`, but I have not observed a hit.
+5. **Quality: does thinking improve extraction accuracy?** The 6.3x cost argument for
+   `thinking_budget=0` is measured; the "answers look equivalent" claim is n=1
+   eyeballing and should not be relied on.
+6. **A Together baseline on the same prompts.** The brief asks for comparison against
+   other models, and the repo ships a Together provider. Not yet run.
+7. **Safety filter false-positive rate on competitor and brand prompts.** A block is
+   terminal and silent; the rate matters for a brand-tracking workload specifically.
+8. **`temperature=0` determinism.** Reported elsewhere as non-deterministic. Affects
+   whether results are reproducible run to run.
+9. **`global` versus regional endpoint behaviour** under the same load.
+10. **ADC token refresh under concurrency.** Tokens last about an hour; a fleet
+    refreshing in lockstep is a real thundering-herd risk. The sidecar makes the
+    boundary observable but a soak long enough to cross it has not been run.
+11. **Multi-worker scaling.** §6d shows a single worker is event-loop bound at ~250
+    rps. More workers is the standard fix, but each gets its own connection pool, so
+    the concurrency limit becomes per-worker rather than global. Untested.
+
+### Known gaps in what is built
+
+Stated plainly rather than left for a reviewer to find:
+
+- **No graceful shutdown.** SIGTERM drops in-flight requests. Fine for a load
+  harness, not for a batch worker that should drain first.
+- **No request IDs or tracing.** A slow request cannot currently be followed from the
+  service through to a specific vendor call.
+- **No Dockerfile for the service.** It runs under uvicorn locally; packaging is not
+  addressed.
+- **Batch API is not implemented**, only modelled. Given §6c it is the highest-value
+  thing to build next, and it is a different API surface rather than a config flag.
+
