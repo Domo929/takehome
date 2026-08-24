@@ -5,6 +5,8 @@ together==2.12.0
 google-genai>=2.19.0
 google-auth>=2.56.0
 httpx>=0.28.0
+# HTTP/2 support, opt-in via GEMINI_HTTP2. See FINDINGS 6h.
+h2>=4.0.0
 
 # instrumentation
 prometheus-client>=0.26.0

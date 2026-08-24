@@ -136,6 +136,7 @@ class Gemini(LLM):
         base_url: str | None = None,
         adaptive: bool | None = None,
         adaptive_config: AdaptiveConfig | None = None,
+        http2: bool | None = None,
     ) -> None:
         # "vertex" | "developer". Explicit beats inferred: silently falling back to a
         # different backend than intended would invalidate every number we collect.
@@ -182,11 +183,21 @@ class Gemini(LLM):
             max_connections=self._max_connections,
             max_keepalive_connections=self._max_connections,
         )
+        # HTTP/2 multiplexes many concurrent requests over a handful of TLS
+        # connections instead of one connection each. TLS is the dominant client-side
+        # cost at high concurrency: without it a local backend sustains 468 rps at
+        # 1024 concurrent, while against Vertex the same concurrency collapses to 43.7
+        # rps with 4.3s of event-loop lag (FINDINGS 6h). Fewer handshakes should move
+        # that ceiling.
+        self._http2 = (
+            http2 if http2 is not None
+            else os.getenv("GEMINI_HTTP2", "").lower() in ("1", "true", "yes")
+        )
         http_options = types.HttpOptions(
             # Pin the stable surface; "v1beta1" drifts under us.
             api_version=None if self._backend == "developer" else "v1",
             base_url=base_url or os.getenv("GEMINI_BASE_URL") or None,
-            async_client_args={"limits": limits},
+            async_client_args={"limits": limits, "http2": self._http2},
             # retry_options intentionally unset: retries belong above, where they
             # are visible to metrics.
         )
@@ -286,6 +297,7 @@ class Gemini(LLM):
             "max_output_tokens": self._max_output_tokens,
             "thinking_budget": self._thinking_budget,
             "max_connections": self._max_connections,
+            "http2": self._http2,
             "parallelism": self._parallelism,
             "max_attempts": self._retry_policy.max_attempts,
             "attempt_timeout_s": self._retry_policy.attempt_timeout_s,

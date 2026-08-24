@@ -1101,6 +1101,153 @@ this client on this machine, not a universal constant.
 version. It should be re-measured wherever this actually deploys, which is what
 `make calibrate` and this sweep exist for.
 
+## 6h. What actually costs us throughput: TLS, not concurrency *(measured)*
+
+§6g established that past 128 concurrent the bottleneck is ours rather than Vertex's.
+That is a diagnosis, not a cause. This section finds the cause, and almost all of it
+was measured for **$0**.
+
+### Testing our own code does not need the vendor
+
+Throughput of our own stack is a client-side property, so the right rig is
+`k6 → service/app.py → mock/fake_vertex.py`, all over HTTP on loopback. The mock is
+configured to mirror Vertex's observed latency (~1.35 s p50) with no server-side
+ceiling, so any ceiling found is unambiguously ours. That costs nothing and can be
+re-run as often as an optimisation needs checking.
+
+Full stack, arrival-rate ramp:
+
+| Offered | Achieved | Shed | p50 | p99 |
+|---|---|---|---|---|
+| 25 rps | 23.3 | 0 | 1,367 ms | 2,473 ms |
+| 50 rps | 46.5 | 0 | 1,344 ms | 2,414 ms |
+| 75 rps | 69.1 | 0 | 1,340 ms | 2,404 ms |
+| 100 rps | 90.9 | 0 | 1,339 ms | 2,374 ms |
+| 150 rps | 117.7 | 934 | 3,935 ms | 11,347 ms |
+
+Our stack saturates near ~120 rps, above the 73.7 rps ceiling measured against real
+Vertex.
+
+### Where the CPU goes
+
+Profiling the provider against a zero-latency backend, so every millisecond is ours:
+
+| Function | Calls | Per request |
+|---|---|---|
+| `pydantic.main.__iter__` | 1,484,800 | **1,856** |
+| `httpcore ... is_idle` | 707,010 | **884** |
+| `genai._common.get_value_by_path` | 76,000 | 95 |
+
+Nearly 1,900 pydantic iterations and 884 connection-pool idle checks per request. The
+SDK's response modelling and httpcore's pool scan dominate — but at the recommended
+128 concurrent the client sustains **654 rps against a local backend**, so at the 73.7
+rps Vertex actually delivers we are using roughly 11% of client capacity. **At the
+recommended operating point we are not the bottleneck.**
+
+### The TLS result, and why it requires the real endpoint
+
+The interesting case is why c=1024 collapsed. Running the identical concurrency sweep
+against the loopback mock, which is **plain HTTP**:
+
+| Concurrency | Local (no TLS) | Real Vertex (TLS) |
+|---|---|---|
+| 128 | 506 rps, 49 ms lag | 73.7 rps, <5 ms lag |
+| **1024** | **468 rps, 504 ms lag** | **43.7 rps, 4,301 ms lag** |
+
+**Without TLS the collapse does not happen.** At 1024 concurrent the local stack loses
+only 8% of its throughput, while against Vertex it loses 41% and event-loop lag is
+roughly 9x worse. Concurrency itself is not the problem; **maintaining 1,024
+simultaneous TLS connections is**, because handshakes and per-connection crypto are
+CPU-bound work on the event loop.
+
+This is the one thing the mock cannot substitute for, and it is worth stating plainly
+because the rest of this section argues for testing against the mock. The mock speaks
+plain HTTP on loopback, so it has **no TLS handshakes, no certificate validation, no
+per-record encryption, and no connection reuse behaviour to observe**. Any question
+whose answer depends on TLS — connection reuse, handshake cost, HTTP/2 multiplexing,
+ALPN negotiation — is invisible to it by construction. A mock that faked TLS would be
+testing Python's `ssl` module against loopback, which is a different workload from a
+TLS session to a Google frontend with its own cipher suite, session resumption and
+connection limits.
+
+So the rule this repo follows: **use the mock for anything that is our own code, and
+spend on the vendor only for things that are properties of the connection to them.**
+The concurrency sweep, the profile, and the pool-size experiment were all free. Only
+the TLS comparison and the HTTP/2 evaluation needed real Vertex, and together they
+cost a few dollars rather than the price of testing everything live.
+
+### HTTP/2: confirms the diagnosis, does not beat the optimum
+
+If the cost is maintaining many TLS connections, HTTP/2 should help: it multiplexes
+many concurrent requests over a handful of connections. Vertex negotiates h2, so this
+was worth measuring.
+
+| Concurrency | HTTP/1.1 rps | HTTP/1.1 p99 | HTTP/2 rps | HTTP/2 p99 | Δ throughput |
+|---|---|---|---|---|---|
+| **128** | **73.7** | **3,813 ms** | not run | — | — |
+| 256 | 63.0 | 10,818 ms | 56.1 | 6,449 ms | **−11%** |
+| 1024 | 43.7 | 49,443 ms | 55.2 | 19,478 ms | **+26%** |
+
+And the number that matters most:
+
+| | HTTP/1.1 | HTTP/2 |
+|---|---|---|
+| Event-loop lag at c=1024 | **4,301 ms** | **2 ms** |
+
+**HTTP/2 essentially eliminates the client-side CPU problem.** Lag falls by three
+orders of magnitude, because the client is servicing a handful of multiplexed
+connections instead of a thousand separate TLS sessions. That is direct confirmation
+of the diagnosis: the collapse was TLS connection count, not concurrency.
+
+**It still loses.** At c=1024 with HTTP/2 the client is no longer the constraint, and
+throughput settles at 55.2 rps — better than HTTP/1.1's 43.7, worse than the 73.7 rps
+HTTP/1.1 delivers at c=128. Removing our bottleneck simply exposed the vendor's. And at
+c=256 HTTP/2 is 11% *slower*, which is the usual cost of multiplexing: requests share
+connections, so flow control and head-of-line blocking start to matter.
+
+So the fix works and is not worth adopting. **HTTP/1.1 at 128 concurrent remains the
+best configuration measured.** HTTP/2 ships as `GEMINI_HTTP2=true`, off by default,
+because it is genuinely the right choice for a deployment that must run at very high
+concurrency in one process — and because having measured it, throwing the code away
+would be wasteful.
+
+This is the clearest "tried it, did not work" result in this repo, and the failure was
+informative: it turned a plausible hypothesis about TLS into a confirmed one.
+
+### What would actually raise the ceiling
+
+In order of expected return:
+
+1. **More worker processes.** One process peaks at ~74 rps. Each additional uvicorn
+   worker brings its own event loop, pool and TLS workload on its own core. This is
+   the only change that moves the ceiling rather than redistributing it, and §6g
+   already shows the per-process limit is not the vendor.
+2. **Do less per response.** ~1,900 pydantic iterations per request is the SDK's
+   modelling cost. Parsing the JSON directly would avoid it, at the cost of hand-
+   maintaining response handling against an evolving API — a bad trade for something
+   currently using 11% of client capacity.
+3. **Nothing.** At the recommended 128 concurrent, the client runs at roughly 11% of
+   what it can sustain locally, and Vertex is the constraint. Per §0b the workload
+   needs about 6 rps averaged. Optimising a component with a 12x margin over its own
+   ceiling, against a workload needing a fraction of that, is effort better spent on
+   the Batch API.
+
+### Connection pool size is a weak lever
+
+At fixed concurrency 128, varying only the pool:
+
+| Pool | Throughput | vs best |
+|---|---|---|
+| 160 | 564.8 rps | 86.0% |
+| 256 | 653.7 rps | 99.5% |
+| 512 | 657.1 rps | 100% |
+| 1024 | 654.3 rps | 99.6% |
+| 2048 | 633.8 rps | 96.5% |
+
+Too small starves connection churn; too large pays for the linear pool scan. The
+optimum is roughly 2–4x concurrency, which is what `min(128, pool // 2)` already lands
+on. Worth knowing, but not where the throughput went.
+
 ## 7. Cost control *(validated)*
 
 Confirmed rates: **$0.30 / 1M input, $2.50 / 1M output**, thinking billed at the

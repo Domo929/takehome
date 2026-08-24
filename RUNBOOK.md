@@ -281,6 +281,37 @@ generator could not keep up **exits non-zero**. That is the automated check that
 result was not silently rig-bound. On the Python side the equivalent signals are
 `llm_pool_saturation_ratio` and `llm_event_loop_lag_seconds`.
 
+## What to test against the mock, and what needs the vendor
+
+Most performance questions are about *our* code, and our code can be driven end to end
+without spending anything:
+
+```
+k6  ->  service/app.py  ->  mock/fake_vertex.py      # all HTTP, all local, $0
+```
+
+Configure the mock to mirror the vendor's observed latency so the concurrency dynamics
+are realistic, and leave its own ceilings disabled so any ceiling found is ours:
+
+```bash
+curl -X POST http://127.0.0.1:8088/__configure -H 'Content-Type: application/json' \
+  -d '{"base_latency_s":1.35,"latency_sigma":0.25,
+       "knee_concurrency":1000000,"saturation_concurrency":1000000}'
+```
+
+**What the mock cannot answer.** It speaks plain HTTP on loopback, so it has no TLS
+handshakes, no certificate validation, no per-record encryption and no realistic
+connection-reuse behaviour. Anything whose answer depends on the transport — TLS cost
+at high connection counts, HTTP/2 multiplexing, ALPN, session resumption — is
+invisible to it by construction, and faking it would just measure Python's `ssl`
+module against loopback rather than a real session to a Google frontend.
+
+That distinction is not academic: it is the whole of FINDINGS §6h. The same
+concurrency that collapses against Vertex (43.7 rps, 4.3 s event-loop lag at c=1024)
+runs fine against the mock (468 rps, 0.5 s), and the difference is TLS.
+
+So: **mock for our code, vendor only for properties of the connection to them.**
+
 ## Finding the concurrency optimum
 
 Short stages are valid if the warm-up is discarded — a cold pool spends its first
