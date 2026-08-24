@@ -166,11 +166,21 @@ async def test_retry_budget_sheds_load_when_exhausted(fake_vertex):
     fake_vertex.configure(rate_limit_probability=0.0)
 
 
-async def test_parallelism_is_derived_from_pool_size(fake_vertex):
-    """parallelism() must reflect the measured knee and never exceed the pool."""
+async def test_parallelism_reflects_the_validated_operating_point(fake_vertex):
+    """parallelism() defaults to the only concurrency validated under sustained load.
+
+    64 is what two multi-minute runs on Vertex actually held. It is also capped by the
+    connection pool, because a limit above the pool queues on sockets instead of at
+    the admission gate — which is precisely the invisible queueing this is meant to
+    prevent.
+    """
     provider = build(fake_vertex, max_connections=250)
-    assert provider.parallelism() == 32
+    assert provider.parallelism() == 64
     assert provider.parallelism() < provider.max_connections
+
+    # With a small pool the pool wins, since it is the tighter real constraint.
+    tight = build(fake_vertex, max_connections=40)
+    assert tight.parallelism() == 16
 
 
 async def test_concurrent_requests_do_not_exceed_pool(fake_vertex):

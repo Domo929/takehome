@@ -176,10 +176,10 @@ pinned by `test_base_contract_is_unmodified_and_honored`, which asserts the base
 dataclass still has exactly its three original fields — so a future edit to
 `llm/llm.py` fails the suite rather than passing silently.
 
-`parallelism()` keeps its signature. The value is derived from the connection pool
-rather than hardcoded, because a static integer is the wrong shape for a service
-governed by Dynamic Shared Quota with no published per-project ceiling. The honest
-answer is whatever load testing measured.
+`parallelism()` keeps its signature. It now returns **64**, which is the only
+concurrency validated under sustained load (§6f) rather than a value inferred from
+pool arithmetic, and it stays capped by the connection pool because a limit above the
+pool queues on sockets instead of at the admission gate.
 
 **What I would propose if I owned the interface:** promote `finish_reason` onto
 `SimpleResponse`. Truncation is not Gemini-specific — Together exposes the same
@@ -940,9 +940,25 @@ capacity moving across hours or across a business-hours boundary, which is the a
 justification for the adaptive limiter in §6b. Both runs saw the same ceiling, which is
 weak evidence *against* volatility on this timescale.
 
-Given that, the honest recommendation is now: **use a fixed limit at the measured knee
-and treat the adaptive limiter as optional.** It is off by default, it is tested, and
-the case for enabling it needs evidence that has not been gathered.
+Given that, the honest recommendation is: **use a fixed limit of 64 and treat the
+adaptive limiter as optional.** It is off by default, it is tested, and the case for
+enabling it rests on evidence I have not gathered. Shipping less machinery is the right
+default when the justification is unproven; the code is there if a multi-hour run later
+shows capacity moving, and removing it is a one-line change if it does not.
+
+**On the value 64 specifically.** An earlier version of this document put the operating
+point at 32, taken from a sweep whose stages ran 8 seconds each. Those numbers are now
+known to be unreliable for the same reason the rest of that sweep was: a short burst
+measures connection warm-up, not steady state. Every level in that sweep except 64
+lacks a sustained measurement, so the "knee at 32" was an artifact of the shortest
+tests in the set. What I can defend is that **67,000 requests across 30 minutes held
+concurrency 64 at 36–37 rps** with a 0.04% rate-limit rate and no failures reaching a
+caller.
+
+What I have *not* established is whether 64 is optimal or merely sufficient. A
+sustained sweep at 32, 64 and 128 would settle it; at several minutes per level that
+is roughly $60 of vendor spend, which is hard to justify against a workload averaging
+6 rps (§0b).
 
 ### A confounder I created and removed
 
@@ -985,51 +1001,39 @@ long run can be stopped on judgment rather than discovered afterwards.
 
 ## 8. What I would do before production
 
-**Measure, then set `parallelism()`.** Run experiments 2–4 against the real project to
-find the knee, and treat the result as a measured operating point with a re-measure
-cadence, not a constant.
+Ordered by what would actually change an outcome.
 
-**Confirm the quota model.** Dynamic Shared Quota publishes no per-project ceiling.
-`gcloud alpha services quota list` on the real project would establish whether there is
-a hard limit at all, and `usage_metadata.trafficType` (already parsed and recorded)
-distinguishes on-demand from provisioned throughput per request.
+**1. Implement the Batch API for the scheduled tier.** Per §0b this is the largest
+remaining lever — roughly **$29,600/year at 200 reports** — and it now has a clearly
+bounded home: scheduled refreshes only, never the ad-hoc path. It is a different API
+surface rather than a config flag, so it is real work, but the payoff is unambiguous.
 
-**Characterize ADC token refresh.** Tokens live about an hour. A fleet refreshing on
-the same schedule is a thundering-herd risk that is invisible while the refresh sits
-inside the SDK. The k6 sidecar makes the boundary explicit; a soak long enough to
-cross it would show whether it matters.
+**2. Split the two tiers in the calling layer.** The provider is already indifferent to
+which path calls it. What is missing is a queue and a scheduler that routes new-report
+bursts to the interactive path and refreshes to batch. Without that split, either new
+reports get slow or scheduled work costs double.
 
-**Decide the truncation policy deliberately.** `is_usable` currently discards
-truncated answers. For mention counting I believe a fragment is worse than a failure,
-but that is a product decision and it belongs to whoever owns the downstream counts.
+**3. Decide the truncation policy deliberately.** §6f measured **3.3% truncation** at a
+512-token cap and **20% at 256**. `is_usable` currently discards truncated answers,
+which for mention-counting I believe is right — a fragment silently skews counts, and
+that is worse than a visible failure. But it is a product decision, and at 3.3% of
+tens of thousands of requests it is not a rounding error.
 
-**Answered since (see §0b):** the workload is batch, at thousands of prompts per day,
-and the consumer of `answer` is an LLM parser. Those answers drive §6c and the
-structured-output recommendation below.
+**4. Run a quality evaluation.** The 4.0x cost case for `thinking_budget=0` is measured;
+the claim that answers are equivalent is n=1 eyeballing. This is the largest unverified
+assumption behind the main recommendation.
 
-**Still open:**
+**5. Characterize ADC token refresh across an hour boundary.** Tokens live about an
+hour and a fleet refreshing in lockstep is a genuine thundering-herd risk. The sidecar
+makes the boundary observable; neither soak ran long enough to cross it.
 
-1. **Are logprobs load-bearing?** `together.py` requests `logprobs=1` and never reads
-   the result. If mention confidence matters downstream, that changes the provider
-   surface, and Vertex's logprobs support carries quota caveats.
-2. **Does a duplicate answer cause harm?** We retry on 429 and 5xx. If a retry lands
-   after the original in fact succeeded, does double-counting a brand mention corrupt
-   the output? That decides whether idempotency keys are needed.
-3. **Is the 2.5 Flash retirement planned for**, or should this target Gemini 3 Flash
-   directly? Seven weeks is short for a migration nobody has scheduled.
-4. **Confirm batch pricing against a real invoice.** §6c uses Google's published
-   rates; the relative ordering is robust but the absolute figures are unverified.
+**Already answered, and no longer future work:**
 
-**Because the consumer is an LLM parser, structured output deserves a look.** Gemini
-supports `responseSchema` for guaranteed-shape JSON. If a second model is currently
-being paid to turn prose into structured brand mentions, having Gemini emit the
-structure directly removes that call entirely — a larger saving than any of the
-tuning in §6c, and it also makes truncation detectable as malformed JSON rather than
-as a plausible-looking short list. I did not build this because it changes the
-response contract and that is a product decision, but it is the first thing I would
-prototype.
-
----
+- *Measure and set `parallelism()`* — done, 64, validated across 30 minutes (§6f)
+- *Confirm the quota model* — `traffic_type` reports `ON_DEMAND`; rate-limit rate is
+  0.04% at ~2,200 requests/minute
+- *Establish whether the ceiling is ours or theirs* — theirs; pool peaked at 25% and
+  event loop lag under 5 ms (§6f)
 
 ## 9. Open questions and things still to confirm
 
