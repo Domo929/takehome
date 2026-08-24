@@ -5,7 +5,7 @@ PY := .venv/bin/python
 K6 := k6
 export PYTHONPATH := .
 
-.PHONY: help venv test mock-up mock-down obs-up obs-down obs-logs \
+.PHONY: help venv preflight test mock-up mock-down obs-up obs-down obs-logs \
         k6-smoke k6-ramp k6-constant sweep-mock pool-experiment clean
 
 help:
@@ -16,6 +16,9 @@ venv: ## Create the venv and install dependencies
 	python3 -m venv .venv
 	$(PY) -m pip install --upgrade pip
 	$(PY) -m pip install -r requirements.txt
+
+preflight: ## Validate credentials + cost with ONE real request
+	$(PY) -m harness.preflight $(ARGS)
 
 test: ## Run the test suite (no network, no spend)
 	$(PY) -m pytest tests/ -q

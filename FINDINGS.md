@@ -1,12 +1,20 @@
 # Findings
 
-> **Status.** Everything below marked *(validated)* was produced against the fake
-> Vertex endpoint in `mock/`, which exercises the full HTTP path, the real SDK, and
-> the real connection pool at zero cost. Sections marked *(pending credentials)* are
-> designed and ready to run but need access to a real project. I have been explicit
-> about which is which rather than presenting harness-validated numbers as vendor
+> **Status.** Findings are labelled by the evidence behind them.
+>
+> *(measured on real Gemini)* — live requests against the **Gemini Developer API**.
+> Real model, real billing, real failure modes. Not Vertex: different quota pool and
+> endpoint, so absolute throughput and latency are not capacity numbers for
+> production. Model behaviour and token economics do transfer.
+>
+> *(validated)* — produced against the fake Vertex endpoint in `mock/`, which
+> exercises the full HTTP path, the real SDK, and the real connection pool at zero
+> cost. Used for mechanism proofs where the vendor is deliberately held constant.
+>
+> *(pending credentials)* — designed and ready, needs a real Vertex project.
+>
+> I have kept these separate rather than presenting harness numbers as vendor
 > measurements.
-
 ---
 
 ## 1. The model retires in seven weeks
@@ -113,27 +121,74 @@ provider derives one from the other so they cannot drift apart.
 
 ---
 
-## 4. Thinking and output share one budget *(validated against the documented model)*
+## 4. Dynamic thinking costs 6.3x more and is the SDK default *(measured on real Gemini)*
 
-`thinking_budget` and `max_output_tokens` draw on a single allowance. Set the budget
-at or above the cap and the model can spend the entire allowance reasoning, returning
-`finish_reason=MAX_TOKENS`, no text, and a full bill.
+These are live measurements against the Gemini Developer API, not the mock. See the
+caveat at the end of this section about what does and does not transfer to Vertex.
 
-This is reproduced as a test (`test_thinking_budget_at_cap_starves_the_answer`) and
-modeled in the fake endpoint, where thinking demand is a function of question
-difficulty rather than answer length — which is why a generous budget can consume
-everything.
+`thinking_budget` and `max_output_tokens` draw on **one shared allowance**. The SDK
+default is `thinking_budget=-1`, meaning dynamic and effectively unbounded. Fifteen
+requests per configuration, identical brand-recommendation prompts, concurrency 3:
 
-The SDK default is `thinking_budget=-1`, meaning dynamic and effectively unbounded.
-For a short-answer brand-recommendation workload that is a live footgun: it is the
-default, it costs output-rate tokens, and its failure mode is an empty response rather
-than an error. The provider defaults to `0` and requires opting in.
+| `thinking_budget` | usable | throughput | p50 | p99 | billed output | thinking | cost |
+|---|---|---|---|---|---|---|---|
+| `0` (off) | **15/15** | 2.87 rps | **977 ms** | **1,507 ms** | 1,195 | 0 | **$0.0032** |
+| `-1` (default) | **14/15** | 0.71 rps | 2,862 ms | 5,857 ms | 7,997 | 6,682 | $0.0202 |
 
-**Pending credentials:** the cost and latency delta between `thinking_budget=0` and
-`-1` on the real model, as a factorial across `max_output_tokens`. Experiment 5 in the
-matrix is built and ready.
+Turning thinking off on this workload gave **6.3x lower cost, 2.9x better p50, 3.9x
+better p99, and 4.1x the throughput** — and it eliminated the one unusable response.
 
----
+**83.6% of billed output tokens were thinking** (6,682 of 7,997). Those tokens bill at
+the output rate and produce no text the user ever sees. On a single-request probe the
+split was starker still: 176 thinking tokens to produce 21 visible ones, for a
+question whose answer was a five-brand list either way. The two answers were
+substantively identical:
+
+```
+thinking_budget=0   ->  "iRobot (Roomba), Shark, Roborock, and Eufy."
+thinking_budget=-1  ->  "iRobot (Roomba), Roborock, Eufy, Shark, and Ecovacs."
+```
+
+### The failure mode is silent, not loud
+
+With dynamic thinking, **1 of 15 responses came back `finish_reason=MAX_TOKENS`** —
+HTTP 200, a partial answer, billed in full. Forcing the collision makes it obvious.
+With `thinking_budget=1024` against `max_output_tokens=128`:
+
+```
+finish_reason   MAX_TOKENS
+billed output   124 tokens  (118 thinking, 6 visible)
+answer          "iRobot (Roomba),"
+```
+
+**118 tokens of reasoning bought 6 tokens of answer**, and the answer is a fragment
+ending in a comma. Nothing about that response is an error. It is a 200 with text in
+it. A provider that returns `response.text` and moves on hands that fragment
+downstream as a successful answer, and a brand-mention counter then records exactly
+one brand from a question that asked for five.
+
+This is why `finish_reason` is carried on `GeminiResponse` and why `is_usable`
+requires `STOP` rather than merely non-empty text. In the run above it correctly
+marked that response unusable.
+
+### What this means for configuration
+
+`thinking_budget=0` is the default in this provider, opt-in only. For a
+short-answer extraction workload the reasoning is not buying accuracy — it is buying
+latency and 6x the bill. A workload that genuinely needs reasoning should enable it
+deliberately **and** raise `max_output_tokens` well above the thinking budget, because
+the two share one allowance.
+
+### Caveat on transferability
+
+These numbers come from the **Gemini Developer API**, not Vertex: a different quota
+pool, a different endpoint, and free-tier rate limits. The absolute throughput and
+latency figures are **not** Vertex capacity numbers and should not be read as such.
+
+What should transfer is the *relative* effect, because it is a property of the model
+and its billing rather than of the serving tier: thinking tokens bill at the output
+rate, they share the output allowance, and the default is unbounded. Confirming the
+ratio on Vertex is experiment 5 in the matrix and is ready to run.
 
 ## 5. The SDK serializes one field in snake_case *(validated)*
 

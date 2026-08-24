@@ -16,6 +16,7 @@ loadtest/k6/    k6 control harness + ADC token sidecar
 mock/           fake Vertex endpoint for $0 iteration
 observability/  Prometheus + Grafana, provisioned dashboards
 tests/          12 tests, no network, no spend
+results/real/   live measurements (n=15 per thinking config)
 ```
 
 ## Try it without credentials
@@ -48,9 +49,11 @@ FINDINGS §1.
 against a service answering in 500 ms, the client reports 4.2 s and caps at 15.4 rps.
 The vendor response gives no hint. Instrumented as `llm_pool_saturation_ratio`.
 
-**Thinking tokens bill at the output rate and share the output budget.** Set
-`thinking_budget` at or above `max_output_tokens` and you get HTTP 200, no text, and a
-full charge. Default here is `0`, opt-in only.
+**Dynamic thinking costs 6.3x more, and it is the SDK default.** Measured on real
+Gemini, n=15 per config: turning `thinking_budget` off gave 6.3x lower cost, 2.9x
+better p50, and 4.1x the throughput, for a substantively identical answer. 83.6% of
+billed output tokens were invisible reasoning. Default here is `0`, opt-in only.
+See FINDINGS §4.
 
 ## Cost safety
 
