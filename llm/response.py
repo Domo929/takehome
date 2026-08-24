@@ -1,0 +1,85 @@
+"""Gemini-specific response type.
+
+``LLM.SimpleResponse`` is treated as a fixed contract: it is what every existing
+caller already depends on, and the take-home explicitly frames the base class as
+given. So rather than widen it, this module extends it.
+
+``GeminiResponse`` is a strict extension. Every added field carries a default, no
+inherited field changes type or meaning, and ``isinstance(r, LLM.SimpleResponse)``
+holds. Code written against the base contract keeps working untouched; code that
+knows it is talking to Gemini can reach the extra metadata.
+
+Two things Gemini needs that the base contract has no room for:
+
+``finish_reason`` — Gemini returns HTTP 200 with a truncated fragment when it stops
+for ``MAX_TOKENS``. Without the reason, a fragment is indistinguishable from a
+complete answer, and for brand-mention counting a fragment is worse than an error
+because it looks like success and quietly skews the counts.
+
+``thinking_tokens`` — reported separately by the API but billed at the output rate.
+Note the split: ``output_tokens`` (inherited) is the *total billed* output and
+already includes thinking, so the base contract stays correct on its own terms for
+any caller that ignores this subclass. ``thinking_tokens`` is purely additive detail.
+
+If I owned the interface I would propose promoting ``finish_reason`` into
+``SimpleResponse``, since truncation is not Gemini-specific — Together exposes the
+same concept as ``choices[0].finish_reason``. That is a change for whoever owns the
+contract to make, not one to take unilaterally.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any
+
+from .llm import LLM
+
+
+class FinishReason(StrEnum):
+    """Why generation stopped, normalized so callers never branch on vendor strings."""
+
+    STOP = "STOP"
+    MAX_TOKENS = "MAX_TOKENS"
+    SAFETY = "SAFETY"
+    RECITATION = "RECITATION"
+    BLOCKLIST = "BLOCKLIST"
+    PROHIBITED_CONTENT = "PROHIBITED_CONTENT"
+    SPII = "SPII"
+    MALFORMED_FUNCTION_CALL = "MALFORMED_FUNCTION_CALL"
+    OTHER = "OTHER"
+    UNKNOWN = "UNKNOWN"
+
+    @property
+    def is_usable(self) -> bool:
+        return self is FinishReason.STOP
+
+
+@dataclass
+class GeminiResponse(LLM.SimpleResponse):
+    """``LLM.SimpleResponse`` plus the metadata Gemini needs to be used safely.
+
+    ``answer`` keeps its inherited ``str`` type. The provider raises
+    ``LLMEmptyResponseError`` or ``LLMContentBlockedError`` rather than returning a
+    response with no text, so a returned ``GeminiResponse`` always carries an answer
+    and the base contract is never violated.
+    """
+
+    thinking_tokens: int = 0
+    finish_reason: FinishReason = FinishReason.UNKNOWN
+    latency_ms: float | None = None
+    attempts: int = 1
+    model: str | None = None
+    provider: str | None = None
+    cost_usd: float | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def visible_output_tokens(self) -> int:
+        """Billed output tokens that produced user-visible text."""
+        return max(0, self.output_tokens - self.thinking_tokens)
+
+    @property
+    def is_usable(self) -> bool:
+        """True when there is text *and* generation completed normally."""
+        return bool(self.answer) and self.finish_reason.is_usable

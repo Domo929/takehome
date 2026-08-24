@@ -41,6 +41,7 @@ from llm.errors import LLMError
 from llm.gemini import Gemini
 from llm.llm import LLM
 from llm.metrics import EventLoopLagMonitor, serve as serve_metrics
+from llm.pricing import cost_usd
 
 
 @dataclass
@@ -149,18 +150,32 @@ async def _one_request(
         )
 
     latency_ms = (time.perf_counter() - started) * 1000.0
+
+    # Extended fields live on GeminiResponse, not on the base LLM.SimpleResponse
+    # contract. Reading them defensively keeps the harness usable against any
+    # provider — including the stock Together one — instead of silently requiring
+    # the Gemini subclass.
+    thinking_tokens = getattr(result, "thinking_tokens", 0)
+    cost = getattr(result, "cost_usd", None)
+    if cost is None:
+        cost = cost_usd(getattr(result, "model", None), result.input_tokens, result.output_tokens)
+    finish = getattr(result, "finish_reason", None)
+    finish_label = getattr(finish, "value", "") if finish is not None else ""
+    # Base responses carry no finish reason, so fall back to "has text".
+    usable = getattr(result, "is_usable", bool(result.answer))
+
     await governor.record(
-        cost_usd=result.cost_usd or 0.0,
+        cost_usd=cost,
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
-        thinking_tokens=result.thinking_tokens,
+        thinking_tokens=thinking_tokens,
     )
     return RequestRecord(
         prompt_id=prompt.id, kind=prompt.kind, started_at=started, latency_ms=latency_ms,
-        ok=result.is_usable, finish_reason=result.finish_reason.value,
+        ok=usable, finish_reason=finish_label,
         input_tokens=result.input_tokens, output_tokens=result.output_tokens,
-        thinking_tokens=result.thinking_tokens, cost_usd=result.cost_usd or 0.0,
-        attempts=result.attempts, schedule_lag_ms=lag_ms,
+        thinking_tokens=thinking_tokens, cost_usd=cost,
+        attempts=getattr(result, "attempts", 1), schedule_lag_ms=lag_ms,
     )
 
 

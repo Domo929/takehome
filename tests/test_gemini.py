@@ -11,7 +11,7 @@ import pytest
 
 from llm.errors import LLMContentBlockedError, LLMEmptyResponseError, LLMRateLimitError
 from llm.gemini import Gemini
-from llm.llm import FinishReason
+from llm.response import FinishReason
 from llm.retry import RetryBudget, RetryPolicy
 
 SYSTEM = "You are a market research assistant."
@@ -232,3 +232,66 @@ async def test_sdk_serializes_thinking_budget_in_snake_case(fake_vertex):
         "SDK emitted the budget under an unexpected key; "
         f"got keys {sorted(thinking_config)}"
     )
+
+
+async def test_base_contract_is_unmodified_and_honored(fake_vertex):
+    """The provided LLM.SimpleResponse contract must not be widened or bypassed.
+
+    ``llm/llm.py`` is treated as given. GeminiResponse extends it additively, so any
+    caller written against the base contract keeps working: the isinstance relation
+    holds, inherited fields keep their declared types, and ``answer`` is always a
+    populated ``str`` because the provider raises rather than returning empty text.
+    """
+    import dataclasses
+
+    from llm.llm import LLM
+    from llm.response import GeminiResponse
+
+    base_fields = {f.name: f.type for f in dataclasses.fields(LLM.SimpleResponse)}
+    assert set(base_fields) == {"answer", "input_tokens", "output_tokens"}, (
+        "the base contract gained or lost fields; llm/llm.py must stay as provided"
+    )
+    # The original module has no `from __future__ import annotations`, so field types
+    # resolve to real classes; tolerate either form in case that changes.
+    assert base_fields["answer"] in (str, "str"), (
+        "answer must remain a plain str on the base contract"
+    )
+
+    fake_vertex.configure(
+        empty_probability=0.0, safety_probability=0.0, rate_limit_probability=0.0,
+        server_error_probability=0.0, truncate_probability=0.0,
+    )
+    provider = build(fake_vertex)
+    result = await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+    assert isinstance(result, LLM.SimpleResponse)
+    assert isinstance(result, GeminiResponse)
+    assert isinstance(result.answer, str) and result.answer
+
+    # A caller that knows only the base contract must work unchanged.
+    def legacy_consumer(response: LLM.SimpleResponse) -> int:
+        return response.input_tokens + response.output_tokens
+
+    assert legacy_consumer(result) > 0
+
+
+async def test_output_tokens_stay_correct_for_base_contract_callers(fake_vertex):
+    """A caller reading only ``output_tokens`` still sees the full billed amount.
+
+    Thinking tokens are surfaced separately for callers that want the split, but the
+    inherited field remains the total billed output so cost computed from the base
+    contract alone is right rather than an undercount.
+    """
+    fake_vertex.configure(
+        empty_probability=0.0, safety_probability=0.0, truncate_probability=0.0,
+        rate_limit_probability=0.0, server_error_probability=0.0,
+    )
+    provider = build(fake_vertex, thinking_budget=256, max_output_tokens=4096)
+    result = await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+    assert result.thinking_tokens > 0
+    assert result.output_tokens == result.visible_output_tokens + result.thinking_tokens
+
+    from llm.pricing import cost_usd
+    base_only_cost = cost_usd("gemini-2.5-flash", result.input_tokens, result.output_tokens)
+    assert result.cost_usd == pytest.approx(base_only_cost)

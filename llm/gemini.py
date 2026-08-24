@@ -50,7 +50,8 @@ from .errors import (
     LLMRateLimitError,
     LLMServerError,
 )
-from .llm import LLM, FinishReason
+from .llm import LLM
+from .response import FinishReason, GeminiResponse
 from .metrics import (
     empty_responses_total,
     inflight_requests,
@@ -277,7 +278,7 @@ class Gemini(LLM):
 
     # -- response parsing ----------------------------------------------------
 
-    def _parse(self, response: Any, latency_ms: float, attempts: int) -> LLM.SimpleResponse:
+    def _parse(self, response: Any, latency_ms: float, attempts: int) -> GeminiResponse:
         usage = getattr(response, "usage_metadata", None)
         input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
         visible = int(getattr(usage, "candidates_token_count", 0) or 0)
@@ -299,12 +300,15 @@ class Gemini(LLM):
         )
 
         # `.text` raises on some blocked/empty payloads rather than returning None.
+        # Normalized to "" rather than None so the inherited `answer: str` contract is
+        # never violated. The provider raises before returning an empty answer, so
+        # callers only ever see a populated string.
         try:
-            answer = response.text
+            answer = response.text or ""
         except Exception:
-            answer = None
-        if answer is not None and not str(answer).strip():
-            answer = None
+            answer = ""
+        if not answer.strip():
+            answer = ""
 
         traffic_type = getattr(usage, "traffic_type", None)
         metadata: dict[str, Any] = {"backend": self._backend, "location": self._location}
@@ -314,7 +318,7 @@ class Gemini(LLM):
 
         cost = cost_usd(self._model, input_tokens, output_tokens)
 
-        return LLM.SimpleResponse(
+        return GeminiResponse(
             answer=answer,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -328,7 +332,7 @@ class Gemini(LLM):
             metadata=metadata,
         )
 
-    def _record(self, parsed: LLM.SimpleResponse, outcome: str) -> None:
+    def _record(self, parsed: GeminiResponse, outcome: str) -> None:
         labels = {"provider": _PROVIDER, "model": self._model}
         request_duration.labels(
             **labels, outcome=outcome, finish_reason=parsed.finish_reason.value
@@ -348,7 +352,7 @@ class Gemini(LLM):
 
     async def ask_generic_question(
         self, system_prompt: str, question: str, temperature: float
-    ) -> LLM.SimpleResponse:
+    ) -> GeminiResponse:
         config = types.GenerateContentConfig(
             system_instruction=system_prompt,
             temperature=temperature,
@@ -361,7 +365,7 @@ class Gemini(LLM):
         def _on_retry(err: LLMError, delay: float, attempt: int) -> None:
             retry_attempts_total.labels(provider=_PROVIDER, reason=err.error_class).inc()
 
-        async def _attempt() -> LLM.SimpleResponse:
+        async def _attempt() -> GeminiResponse:
             self._inflight += 1
             inflight_requests.labels(provider=_PROVIDER).set(self._inflight)
             pool_saturation_ratio.labels(provider=_PROVIDER).set(
@@ -384,7 +388,7 @@ class Gemini(LLM):
             latency_ms = (time.perf_counter() - started) * 1000.0
             parsed = self._parse(raw, latency_ms, outcome_tracker.attempts)
 
-            if parsed.answer is None:
+            if not parsed.answer:
                 empty_responses_total.labels(
                     provider=_PROVIDER,
                     model=self._model,

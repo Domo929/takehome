@@ -9,12 +9,13 @@ Adds Gemini 2.5 Flash as a provider, plus the evidence that it holds up under lo
 ## What is here
 
 ```
-llm/            provider layer: gemini.py, errors.py, retry.py, metrics.py, pricing.py
+llm/            provider layer: gemini.py, response.py, errors.py, retry.py,
+                metrics.py, pricing.py  (llm.py is UNCHANGED from upstream)
 harness/        load harness (the subject under test) + cost governor
 loadtest/k6/    k6 control harness + ADC token sidecar
 mock/           fake Vertex endpoint for $0 iteration
 observability/  Prometheus + Grafana, provisioned dashboards
-tests/          10 tests, no network, no spend
+tests/          12 tests, no network, no spend
 ```
 
 ## Try it without credentials
@@ -33,6 +34,11 @@ make k6-constant          # k6 control run into Prometheus
 Grafana at http://localhost:3000, *Takehome* folder.
 
 ## Three things worth knowing
+
+**The provided abstraction is untouched.** `llm/llm.py` is byte-identical to
+upstream. `GeminiResponse` extends `LLM.SimpleResponse` additively for the metadata
+Gemini needs, so base-contract callers keep working — enforced by a test that fails if
+the base dataclass ever changes. See FINDINGS §2.
 
 **The model retires 2026-10-16.** Seven weeks out. The integration works, but the
 durable value is a provider layer where swapping models is a config change. See

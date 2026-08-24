@@ -28,30 +28,54 @@ whether the intent is to standardize on Gemini 3 Flash directly instead.
 
 ---
 
-## 2. Changes to the abstraction, and why
+## 2. Working within the provided contract
 
-The existing `SimpleResponse` cannot represent things Gemini routinely does. Three
-changes, each forced by a real behavior rather than taste:
+I treated `llm/llm.py` as an immutable contract. It is unchanged, byte for byte.
 
-**`answer` is now `str | None`.** Gemini returns HTTP 200 with no text when it stops
-for `MAX_TOKENS` or when a safety filter fires. Typing it `str` puts a `None` into
-code that believes it holds a string, and the failure surfaces somewhere unrelated.
+That was a deliberate call, and initially the wrong one — my first pass widened
+`SimpleResponse` to add `finish_reason`, make `answer` nullable, and carry timing.
+Every one of those changes was avoidable:
 
-**`output_tokens` includes thinking tokens.** Gemini reports `thoughtsTokenCount`
-separately from `candidatesTokenCount` but bills both at the output rate. A provider
-that reports only `candidatesTokenCount` under-reports spend, silently, in a way that
-only shows up on the invoice. `visible_output_tokens` is available when you want just
-the user-facing text.
+**Thinking-token accounting needs no contract change.** Gemini reports
+`thoughtsTokenCount` separately from `candidatesTokenCount` but bills both at the
+output rate. Computing `output_tokens` as visible + thinking keeps the *inherited*
+field meaning "total billed output", which is what a caller reading only the base
+contract already assumes. Reporting `candidatesTokenCount` alone is an undercount
+that surfaces on the invoice rather than in the code.
 
-**`finish_reason` is carried on the response.** Without it, a truncated fragment is
-indistinguishable from a complete answer. For brand-mention counting a fragment is
-worse than an error, because it looks like success and quietly skews the counts —
-hence `is_usable`, which requires both text *and* `finish_reason == STOP`.
+**`answer` does not need to be nullable.** Gemini returns HTTP 200 with no text on
+`MAX_TOKENS` and on safety blocks. Rather than widen the type and push a `None` into
+callers that believe they hold a string, the provider raises `LLMEmptyResponseError`
+or `LLMContentBlockedError`. A returned response always carries text, so `answer: str`
+stays true.
 
-`parallelism()` keeps its signature but the value is now derived from the connection
-pool rather than hardcoded. A static integer is the wrong shape for a service governed
-by Dynamic Shared Quota with no published per-project ceiling; the honest answer is
-whatever load testing measured, which is what `harness/` produces.
+**Only `finish_reason` genuinely had nowhere to go.** Without it, a truncated fragment
+is indistinguishable from a complete answer — and for brand-mention counting a
+fragment is worse than an error, because it looks like success and quietly skews the
+counts.
+
+So `GeminiResponse` (in `llm/response.py`) extends `LLM.SimpleResponse` additively:
+every new field has a default, no inherited field changes type or meaning, and
+`isinstance(response, LLM.SimpleResponse)` holds. Base-contract callers work
+untouched; callers that know they are talking to Gemini get the metadata. This is
+pinned by `test_base_contract_is_unmodified_and_honored`, which asserts the base
+dataclass still has exactly its three original fields — so a future edit to
+`llm/llm.py` fails the suite rather than passing silently.
+
+`parallelism()` keeps its signature. The value is derived from the connection pool
+rather than hardcoded, because a static integer is the wrong shape for a service
+governed by Dynamic Shared Quota with no published per-project ceiling. The honest
+answer is whatever load testing measured.
+
+**What I would propose if I owned the interface:** promote `finish_reason` onto
+`SimpleResponse`. Truncation is not Gemini-specific — Together exposes the same
+concept as `choices[0].finish_reason`, and the existing provider silently discards
+it. That is a change for the contract's owner to make deliberately, not one to take
+unilaterally inside a vendor integration.
+
+The one edit to `llm/together.py` is a one-line bug fix, not a contract change: it did
+`from llm import LLM` inside `llm/together.py`, a circular import that resolves only
+by accident of import order. It is now `from .llm import LLM`.
 
 ---
 
