@@ -30,6 +30,9 @@ UNTRACKED = [
     ("vertex", "preflight single request", 1, 0.0004329),
     ("developer", "preflight + spelling probes", 14, 0.0003000),
     ("developer", "rate-limit probe (230 tiny requests)", 230, 0.0000160),
+    ("vertex", "logprobs support probe", 2, 0.0000700),
+    ("vertex", "logprobs token-cost A/B (10 on, 10 off)", 20, 0.0000128),
+    ("vertex", "logprobs 100-sample experiment", 100, 0.0000146),
 ]
 
 

@@ -636,6 +636,102 @@ For the stated workload this is academic — 250 rps is roughly 400x the average
 of a 50,000-prompt day. It is included because "we measured where it breaks and why"
 is a different claim from "we never got near the limit".
 
+## 6e. Logprobs are free, and they see brands that sampling cannot *(measured)*
+
+Evertune already runs each prompt 100 times, so this is not a proposal to sample less.
+The question is narrower: **given 100 samples we are taking anyway, what do logprobs
+add that counting cannot see?**
+
+`together.py` requests `logprobs=1` and never reads the result, which suggested the
+concept matters to this system even if the current implementation discards it.
+
+### They cost nothing
+
+Ten requests each way against `evertune-tests`/us-central1, identical prompts:
+
+| | input tokens | output tokens | total |
+|---|---|---|---|
+| logprobs off | 26.0 | 2.0 | 28.0 |
+| logprobs on (`logprobs=5`) | 26.0 | 2.0 | 28.0 |
+
+**Identical.** Logprobs are returned as response metadata and are not billed as output
+tokens. There is no token surcharge for turning them on.
+
+Two related observations. `avg_logprobs` is populated on every response **even with
+`response_logprobs` unset**, so a coarse per-response confidence score is already
+available for free today. And the observed latency was lower with logprobs on (354 ms
+against 1,235 ms p50) — I do not believe that is causal, it is almost certainly warm-up
+ordering since the off-case ran first, and I would not report it as a finding.
+
+### What 100 samples miss
+
+One prompt constrained to a single brand name, 100 samples at temperature 1.0,
+`logprobs=5`, total cost **$0.00146**:
+
+**What counting sees — two brands:**
+
+| Brand | Count |
+|---|---|
+| iRobot | 97 / 100 |
+| Roomba | 3 / 100 |
+
+**What logprobs additionally see at the same branch point:**
+
+| Token | Mean P | In samples? |
+|---|---|---|
+| `'i'` (iRobot) | 0.9308 | yes |
+| `'Room'` (Roomba) | 0.0470 | yes |
+| **`'Rob'` (Roborock)** | **0.0183** | **no — 0/100** |
+| **`'Shark'`** | **0.0023** | **no — 0/100** |
+| `'E'` (Eufy?) | 0.0006 | no |
+| `'D'` (Dreame?) | 0.0004 | no |
+
+**Roborock — a major brand in this category — appeared in zero of 100 samples while
+carrying 1.83% of the probability mass at the decision point.** Counting reports it as
+absent, indistinguishable from a brand the model has never heard of. Those are very
+different findings for a brand-tracking product, and only one of them is true.
+
+### The sample sizes counting would need
+
+| Token | P | Chance of 0 hits in 100 | Samples for a ±20% estimate | Cost per prompt |
+|---|---|---|---|---|
+| `'Rob'` | 0.0183 | 15.8% | 1,341 | $0.39 |
+| `'Shark'` | 0.0023 | 79.5% | 10,906 | $3.14 |
+| `'E'` | 0.0006 | 94.5% | 43,778 | $12.62 |
+
+To resolve Shark by counting you would need roughly **10,900 samples per prompt**, at
+about $3.14 each. Logprobs surfaced it inside the 100 samples already being taken, for
+no additional token cost. At 100 prompts per company per day that difference is the
+gap between a viable measurement and an impossible one.
+
+### What this is worth
+
+Three capabilities that counting structurally cannot provide, at zero token cost:
+
+1. **Near-miss detection.** "Your brand is considered 1.8% of the time but never
+   surfaces" is a different and arguably more actionable finding than "your brand does
+   not appear". It is invisible to any amount of counting below ~1,300 samples.
+2. **Resolution below the counting floor.** With n=100 the floor is 1%; anything rarer
+   reads as zero. Three of the six tokens observed sat below it.
+3. **Per-prompt confidence.** Branch-point entropy averaged 0.303 nats here, which is
+   low — the model is confident and 100 samples is comfortably enough. A flatter
+   distribution would signal that this particular prompt is under-sampled, which is a
+   per-prompt judgement that a fixed n=100 cannot make.
+
+### Caveats
+
+The prompt was constrained to a single brand name so the first token is an unambiguous
+branch point. Real prompts return prose, where brand names are multi-token, appear at
+varying positions, and are subject to ordering effects — extracting the same signal
+there is harder and is not demonstrated here. This experiment establishes that the
+information exists and is free; it does not establish that a production extractor is
+easy to write.
+
+Whether this is worth building depends on a question only Evertune can answer: **does
+"almost recommended" matter to the product?** If brand share is the deliverable,
+logprobs are a free precision upgrade. If near-miss visibility is a feature customers
+would pay for, it is a new capability rather than an optimization.
+
 ## 7. Cost control *(validated)*
 
 Confirmed rates: **$0.30 / 1M input, $2.50 / 1M output**, thinking billed at the
@@ -718,7 +814,7 @@ since a question that does not change a decision is not worth anyone's time.
 | # | Question | What changes |
 |---|---|---|
 | 1 | **Would `responseSchema` (structured JSON) replace the downstream LLM parser?** | Potentially removes an entire model call from the pipeline — a larger saving than every tuning lever in §6c combined. Also makes truncation detectable as malformed JSON rather than as a plausible short list. Changes the response contract, so it is a product decision. |
-| 2 | **Are logprobs load-bearing?** `together.py` requests `logprobs=1` and never reads the result. | If mention *confidence* matters downstream, the provider surface has to carry it. Vertex supports `response_logprobs`/`logprobs` with quota caveats, so this is not free. |
+| 2 | **Does "almost recommended" matter to the product?** §6e shows logprobs are free and surface brands invisible to counting. | If brand share is the deliverable, this is a free precision upgrade. If near-miss visibility is something customers would pay for, it is a new capability. Either way it needs a product decision before I build the extractor. |
 | 3 | **Does a duplicate answer cause harm?** | We retry on 429 and 5xx. If a retry lands after the original in fact succeeded, does double-counting a brand mention corrupt results? Decides whether idempotency keys are required. |
 | 4 | **Is the 2026-10-16 retirement of 2.5 Flash planned for?** | Seven weeks. If there is no migration scheduled, this should probably target Gemini 3 Flash instead, and the provider is built so that is a config change. |
 | 5 | **Is `LLM.SimpleResponse` a fixed contract?** | I treated it as immutable and extended by subclass (§2). If it is in fact ours to change, promoting `finish_reason` onto the base type is the cleaner design and Together needs it too. |

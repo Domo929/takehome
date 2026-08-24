@@ -37,6 +37,11 @@ Grafana at http://localhost:3000, *Takehome* folder.
 
 ## Three things worth knowing
 
+**Logprobs are free and reveal brands that 100 samples miss.** Token counts are
+identical with them on or off. In a 100-sample run, Roborock appeared **zero times**
+while holding 1.83% of the probability mass at the decision point — counting would
+need ~1,300 samples to see it, and ~10,900 to resolve Shark at 0.23%. See FINDINGS §6e.
+
 **The workload is batch at thousands of prompts/day, so cost is the problem, not
 scale.** A 50,000-prompt day completes in 3.3 minutes at the measured ~250 rps. Moving
 to thinking-off + Batch API + context caching is an **8.2x cost reduction** —
