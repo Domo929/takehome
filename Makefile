@@ -9,7 +9,7 @@ export PYTHONPATH := .
         k6-smoke k6-ramp k6-constant sweep-mock pool-experiment clean
 
 help:
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 venv: ## Create the venv and install dependencies
