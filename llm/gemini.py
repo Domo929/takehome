@@ -137,6 +137,7 @@ class Gemini(LLM):
         adaptive: bool | None = None,
         adaptive_config: AdaptiveConfig | None = None,
         http2: bool | None = None,
+        grounded: bool | None = None,
     ) -> None:
         # "vertex" | "developer". Explicit beats inferred: silently falling back to a
         # different backend than intended would invalidate every number we collect.
@@ -148,6 +149,14 @@ class Gemini(LLM):
         self._max_output_tokens = max_output_tokens or _env_int("GEMINI_MAX_OUTPUT_TOKENS", 1024)
         self._thinking_budget = (
             thinking_budget if thinking_budget is not None else _env_int("GEMINI_THINKING_BUDGET", 0)
+        )
+        # Live web search. Distinct from thinking in every way that matters: it
+        # changes what the model *knows* rather than how hard it reasons, it bills on
+        # a separate per-prompt SKU rather than in tokens, and its answers are not
+        # reproducible because the web moves underneath them.
+        self._grounded = (
+            grounded if grounded is not None
+            else os.getenv("GEMINI_GROUNDED", "").lower() in ("1", "true", "yes")
         )
 
         # Pool sizing drives the achievable ceiling, so parallelism is derived from it
@@ -296,6 +305,7 @@ class Gemini(LLM):
             "location": self._location,
             "max_output_tokens": self._max_output_tokens,
             "thinking_budget": self._thinking_budget,
+            "grounded": self._grounded,
             "max_connections": self._max_connections,
             "http2": self._http2,
             "parallelism": self._parallelism,
@@ -387,6 +397,21 @@ class Gemini(LLM):
         if not answer.strip():
             answer = ""
 
+        # Grounding evidence. Without the queries and sources a grounded answer is
+        # unreproducible: if a brand's share moves next week there is no way to tell
+        # whether the model changed or the web did.
+        search_queries: list[str] = []
+        sources: list[str] = []
+        if candidates:
+            gm = getattr(candidates[0], "grounding_metadata", None)
+            if gm is not None:
+                search_queries = list(getattr(gm, "web_search_queries", None) or [])
+                for chunk in getattr(gm, "grounding_chunks", None) or []:
+                    web = getattr(chunk, "web", None)
+                    uri = getattr(web, "uri", None) if web else None
+                    if uri:
+                        sources.append(uri)
+
         traffic_type = getattr(usage, "traffic_type", None)
         metadata: dict[str, Any] = {"backend": self._backend, "location": self._location}
         if traffic_type is not None:
@@ -395,13 +420,18 @@ class Gemini(LLM):
         if cached:
             metadata["cached_input_tokens"] = cached
 
-        cost = cost_usd(self._model, input_tokens, output_tokens, cached)
+        cost = cost_usd(
+            self._model, input_tokens, output_tokens, cached, grounded=self._grounded
+        )
 
         return GeminiResponse(
             answer=answer,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             thinking_tokens=thinking,
+            grounded=self._grounded,
+            search_queries=search_queries,
+            grounding_sources=sources,
             finish_reason=finish_reason,
             latency_ms=latency_ms,
             attempts=attempts,
@@ -464,6 +494,11 @@ class Gemini(LLM):
             temperature=temperature,
             max_output_tokens=self._max_output_tokens,
             thinking_config=types.ThinkingConfig(thinking_budget=self._thinking_budget),
+            tools=(
+                [types.Tool(google_search=types.GoogleSearch())]
+                if self._grounded
+                else None
+            ),
         )
 
         outcome_tracker = RetryOutcome()

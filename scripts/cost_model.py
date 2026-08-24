@@ -48,6 +48,7 @@ PROFILES = {
     "thinking-dynamic": {"input": 35.3, "output": 458.3, "thinking": 368.6},
 }
 
+GROUNDING_USD_PER_1K = 25.0
 PRICE_IN = 0.30
 PRICE_OUT = 2.50
 BATCH_MULTIPLIER = 0.50
@@ -89,6 +90,20 @@ def main() -> None:
         ("thinking off + batch", "thinking-off", True, False),
         ("thinking off + batch + caching", "thinking-off", True, True),
     ]
+
+    # Grounding is a separate SKU and a separate measurement condition, so it is
+    # reported on its own rather than folded into the token levers above.
+    print("\nGrounded condition (live search), per request")
+    tok = cost_per_request("thinking-off", batch=False, cached=False)
+    sku = GROUNDING_USD_PER_1K / 1000.0
+    print(f"  {'tokens only (ungrounded)':<38} {tok:>12.8f}")
+    print(f"  {'grounding SKU per prompt':<38} {sku:>12.8f}")
+    print(f"  {'grounded total':<38} {tok + sku:>12.8f}   {(tok + sku) / tok:>5.0f}x")
+    print()
+    print("  At 100 samples per prompt, a single grounded prompt costs "
+          f"${(tok + sku) * 100:.2f} against ${tok * 100:.2f} ungrounded.")
+    print("  Batch and cache discounts apply to tokens, not to the grounding SKU, so")
+    print("  every token lever in this model is nearly irrelevant once grounding is on.")
 
     print("\nPer-request cost")
     print(f"  {'configuration':<38} {'$/request':>12}  {'vs naive':>9}")

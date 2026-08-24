@@ -66,6 +66,17 @@ class GeminiResponse(LLM.SimpleResponse):
     """
 
     thinking_tokens: int = 0
+    # True when the answer was produced with live web search enabled. This is a
+    # different axis from thinking: thinking reasons harder over training data,
+    # grounding injects current search results. For brand tracking the two answer
+    # different questions -- what the model believes, versus what it can find today --
+    # so which condition produced a sample must travel with the sample.
+    grounded: bool = False
+    # Queries the model actually issued, and the sources it cited. Recorded because a
+    # grounded answer without its sources is not reproducible: the web moves, and
+    # without the citations there is no way to tell later why an answer changed.
+    search_queries: list[str] = field(default_factory=list)
+    grounding_sources: list[str] = field(default_factory=list)
     finish_reason: FinishReason = FinishReason.UNKNOWN
     latency_ms: float | None = None
     # Vendor time summed across every attempt. Equals latency_ms for a single-attempt

@@ -71,7 +71,35 @@ def pricing_for(model: str | None) -> ModelPricing:
     return _FALLBACK
 
 
+# Google Search grounding bills per grounded prompt, on a separate SKU from tokens.
+# Published rates have appeared as both $14 and $25 per 1,000; the higher figure is
+# used so estimates are conservative rather than flattering. There is also a free
+# monthly allowance. VERIFY AGAINST A REAL INVOICE before relying on this: unlike the
+# token rates, this one is not measured here.
+GROUNDING_USD_PER_1K_PROMPTS = 25.0
+GROUNDING_FREE_PROMPTS_PER_MONTH = 5_000
+
+
+def grounding_cost_usd(grounded_prompts: int) -> float:
+    """Cost of the grounding SKU alone, excluding tokens."""
+    return grounded_prompts * GROUNDING_USD_PER_1K_PROMPTS / 1000.0
+
+
 def cost_usd(
-    model: str | None, input_tokens: int, output_tokens: int, cached_tokens: int = 0
+    model: str | None,
+    input_tokens: int,
+    output_tokens: int,
+    cached_tokens: int = 0,
+    grounded: bool = False,
 ) -> float:
-    return pricing_for(model).cost(input_tokens, output_tokens, cached_tokens)
+    """Total cost of one request.
+
+    A grounded request pays for its tokens *and* for the grounding query. Charging
+    only tokens understates a grounded workload by a wide margin: at these rates a
+    single grounded prompt costs about $0.025, roughly 87x the token cost of an
+    ungrounded one.
+    """
+    total = pricing_for(model).cost(input_tokens, output_tokens, cached_tokens)
+    if grounded:
+        total += GROUNDING_USD_PER_1K_PROMPTS / 1000.0
+    return total

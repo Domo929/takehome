@@ -124,6 +124,76 @@ against a shared quota — which is exactly where §6f's ceiling and §6b's limi
 
 ---
 
+## 0c. Grounding is the measurement axis, and it dominates cost
+
+A correction to my own framing, and the most consequential one in this document.
+
+I spent §4 measuring **thinking** and recommending it be turned off to save 4x. That
+finding is real, but it is on the **wrong axis for this product**. Evertune's GEO
+measurement runs each prompt twice: once with **live search disabled**, and once with
+**live search enabled**. The difference between those two answers is the product.
+
+Thinking and grounding are unrelated:
+
+| | Thinking | Grounding (live search) |
+|---|---|---|
+| What it changes | how hard the model reasons | **what the model knows** |
+| Knowledge source | training data only | the live web, right now |
+| API | `thinkingConfig.thinkingBudget` | `tools: [{google_search: {}}]` |
+| Billing | output-rate tokens | **separate per-prompt SKU** |
+| Reproducible | yes, same corpus | **no, the web moves** |
+| Product question | — | "what the model believes" vs "what it can find today" |
+
+### The cost consequence is severe
+
+Grounding bills per grounded prompt, not in tokens. At published rates (~$25 per
+1,000; some sources say $14 — **this needs confirming against a real invoice**):
+
+| | Per request | At 100 samples per prompt |
+|---|---|---|
+| Ungrounded | $0.000288 | $0.03 |
+| **Grounded** | **$0.025288** | **$2.53** |
+| Ratio | **88x** | 88x |
+
+**This inverts the cost model in §6c.** Every token lever there — thinking off, Batch
+API, context caching — discounts *tokens*. None of them touch the grounding SKU. Once
+grounding is enabled, tokens are roughly 1% of the bill and the entire optimisation
+story becomes a rounding error.
+
+For a workload running 100 samples per prompt across both conditions, the grounded
+half is where essentially all the money goes. The right questions become: does the
+grounded condition need 100 samples, or would fewer suffice given its answers are
+already anchored to retrieved sources? And how far does the free monthly allowance
+(~5,000 grounded prompts) go?
+
+I have not measured this. **It is the single largest open question in this document**,
+and it is a cost question rather than an engineering one.
+
+### What the code now does
+
+`GEMINI_GROUNDED=true`, or `Gemini(grounded=True)`, enables `google_search`. The two
+axes are independent, so all four combinations are expressible.
+
+Grounded responses carry their evidence: `search_queries` (what the model actually
+searched) and `grounding_sources` (the URLs it cited). That is not decoration. **A
+grounded answer without its sources is unreproducible** — if a brand's measured share
+moves next week, the citations are the only way to tell whether the model changed or
+the web did. For a product whose output is a time series of brand mentions, that
+distinction is the difference between a signal and an artifact.
+
+Cost accounting adds the SKU fee for grounded requests, so `llm_spend_usd_total` does
+not understate a grounded run by 88x.
+
+### What §4 is still good for
+
+The thinking finding is not wasted, it is just differently scoped. **Both measurement
+conditions still have a thinking setting**, and the default is dynamic. So §4 applies
+*within* each condition: leaving thinking on the SDK default costs 4x in tokens on
+both halves of the measurement, for no product benefit that has been demonstrated.
+Turning it off is still right — it simply is not the axis being measured.
+
+---
+
 ## 1. The model retires 2026-10-16 — noted, not blocking
 
 Gemini 2.5 Flash on Vertex is scheduled for retirement on **2026-10-16**, confirmed
@@ -227,7 +297,13 @@ provider derives one from the other so they cannot drift apart.
 
 ---
 
-## 4. Dynamic thinking costs 4.1x more on Vertex, and is the SDK default *(measured on Vertex and the Developer API)*
+## 4. Dynamic thinking costs 4.0x more, and is the SDK default *(measured)*
+
+> **Scope, per §0c:** this is about *thinking*, not about grounding. Evertune's
+> measurement axis is live search on versus off; thinking is an orthogonal setting
+> that applies within each of those conditions. The finding below is a cost and
+> latency result, not a statement about the product's measurement.
+
 
 Measured on **both** serving tiers: Vertex AI (`evertune-tests`, the production
 target) and the Gemini Developer API. Fifteen requests per configuration, identical
@@ -1309,6 +1385,12 @@ makes the boundary observable; neither soak ran long enough to cross it.
   event loop lag under 5 ms (§6f)
 
 ## 9. Open questions and things still to confirm
+
+**Grounding economics (largest open item).** At a claimed ~$25/1k grounded prompts, a
+grounded request costs 88x an ungrounded one, and no token optimisation touches it.
+Confirming the real rate against an invoice, and establishing whether the grounded
+condition needs the same 100 samples as the ungrounded one, is worth more than every
+other cost lever in this document combined. See §0c.
 
 ### Answered by Evertune
 
