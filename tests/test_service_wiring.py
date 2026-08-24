@@ -31,8 +31,8 @@ async def test_service_capacity_matches_provider_parallelism(_dev_env):
     async with service_app.lifespan(service_app.app):
         assert service_app.state.provider is not None
         assert service_app.state.capacity == service_app.state.provider.parallelism()
-        # 64 is the value validated under sustained load; see FINDINGS 6f.
-        assert service_app.state.capacity == 64
+        # 128 is the top of the measured range; see FINDINGS 6g.
+        assert service_app.state.capacity == 128
 
 
 async def test_service_capacity_never_exceeds_the_connection_pool(_dev_env, monkeypatch):
@@ -48,7 +48,7 @@ async def test_service_capacity_never_exceeds_the_connection_pool(_dev_env, monk
             f"pool={conns} gave parallelism={provider.parallelism()}"
         )
         # And never above the value we actually validated.
-        assert provider.parallelism() <= 64
+        assert provider.parallelism() <= 128
 
 
 async def test_explicit_capacity_override_wins(_dev_env, monkeypatch):

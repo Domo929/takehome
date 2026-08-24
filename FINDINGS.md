@@ -987,6 +987,120 @@ run confirms 3.3% at 512:
 **A 256-token cap silently truncates one in five brand-recommendation answers**, each
 a billed HTTP 200 that only `finish_reason` distinguishes from a complete one.
 
+## 6g. The ceiling is 128, and it is our event loop — not Vertex *(measured)*
+
+The earlier attempt at this produced a "knee at 32" from a sweep whose stages ran 8
+seconds each. Those numbers were wrong because a cold connection pool spends its first
+seconds on TLS handshakes rather than on the service.
+
+**That is a warm-up problem, not a duration problem**, and it has a cheap fix: run
+short stages but discard the opening seconds. `--warmup-s` excludes a leading window
+from latency and throughput while still counting it for cost, since those requests were
+billed. The method was validated first against a mock configured with a *known* knee at
+48, where it correctly showed linear scaling to 32, degradation at 64, and collapse at
+128. Total cost of the real sweep: **$10.72**, against roughly $60 for equivalent
+coverage with full-length soaks.
+
+### The full curve
+
+Vertex us-central1, 25–75 s measured per stage after a discarded warm-up:
+
+| Concurrency | Throughput | rps per unit | p50 | p99 | **Event loop lag** | Pool |
+|---|---|---|---|---|---|---|
+| 8 | 4.2 rps | 0.525 | 1,534 ms | 7,571 ms | ~0 ms | 25% |
+| 16 | 7.9 rps | 0.496 | 1,479 ms | 8,866 ms | ~0 ms | 25% |
+| 32 | 17.2 rps | 0.537 | 1,473 ms | 8,049 ms | ~0 ms | 25% |
+| 64 | 36.1 rps | 0.565 | 1,410 ms | 4,133 ms | <5 ms | 25% |
+| 96 | 53.4 rps | 0.556 | 1,396 ms | 6,350 ms | <5 ms | 38% |
+| **128** | **73.7 rps** | **0.575** | **1,328 ms** | **3,813 ms** | **<5 ms** | 50% |
+| 256 | 63.0 rps | 0.246 | 1,962 ms | 10,818 ms | **457 ms** | 50% |
+| 1024 | 43.7 rps | 0.043 | 17,557 ms | 49,443 ms | **4,301 ms** | 50% |
+
+Three regimes, and the last column explains all of them.
+
+**Linear to 128.** Rps per unit of concurrency holds between 0.496 and 0.575 across a
+16x range — that ratio is essentially 1/1.8 s, the observed latency plus overhead.
+Little's Law holding cleanly. p50 *improves* monotonically (1,534 → 1,328 ms) and p99
+at c=128 is the lowest of any stage.
+
+**Degrading at 256.** Throughput falls 15% below c=128 while p50 rises 48% and p99
+triples.
+
+**Collapsed at 1024.** Throughput is *below the c=64 level*, p50 is 13x worse, and p99
+reaches 49 seconds. Pushing 8x harder than the optimum delivers 40% less work.
+
+### The diagnosis: it is us
+
+The connection pool sat at **50% throughout** — it was raised to 2,048 for these runs
+specifically so it could not be the constraint, and it was not. Vertex contributed 4
+rate-limit responses and 6 server errors across the whole extreme run, all absorbed by
+retry.
+
+What moved is **event loop lag**: from under 5 ms through c=128, to 457 ms at 256, to
+**4,301 ms at 1024**. That is the Python event loop falling seconds behind on
+scheduling. At c=1024 a quarter of the 17.5 s p50 is our own scheduler delay before
+any request reaches the network, and the rest is queueing behind it.
+
+So the answer to "is the ceiling us or them" is unambiguous, and it is the *opposite*
+of §6f. Up to 128, the ceiling was Vertex and our client was idle. Past 128, **the
+ceiling is a single Python process** and Vertex is not the limiting factor at all.
+
+This is the metric earning its place. Without `llm_event_loop_lag_seconds` the c=1024
+result reads as "Vertex collapses under load", which is both wrong and the kind of
+wrong that gets designed around expensively.
+
+### Consequences
+
+**`parallelism()` now defaults to `min(128, pool // 2)`.** 128 is a measured optimum
+with degradation on both sides, not the largest number that happened to work.
+
+The pool cap also changed, from `pool / 2.5` to `pool // 2`. The old divisor was chosen
+for headroom without evidence; 50% saturation is what was actually observed working at
+the optimum.
+
+**Scaling past ~74 rps means more processes, not more concurrency.** One worker
+saturates at 128 concurrent. The next increment is a second process with its own event
+loop and pool — which also makes the concurrency limit per-worker rather than global,
+so a fleet of N workers offers N x 128 against a shared quota, and quota becomes the
+binding constraint again.
+
+**For the ad-hoc burst** (§0b), a 100-prompt report is 10,000 requests:
+
+| Concurrency | Time for a 100-prompt report |
+|---|---|
+| 64 | 4.6 min |
+| **128** | **2.3 min** |
+| 256 | 2.6 min (slower *and* worse tail) |
+
+Same cost either way, since cost is per request. Half the wait, and the naive "just
+raise concurrency" instinct is actively counterproductive past the optimum.
+
+### This corrects my own recommendation twice
+
+| Version | Claim | Basis | Verdict |
+|---|---|---|---|
+| First | knee at 32 | 8-second stages | artifact of a cold pool |
+| Second | operating point 64 | the only value with sustained data | true but arbitrary |
+| **Now** | **optimum 128, client-bound above it** | **warm-up-corrected sweep to 1024** | **stands** |
+
+Recommending 64 was not wrong so much as incurious — it was the number I happened to
+have, presented as though it were the number that mattered.
+
+### Caveats
+
+**Sustained evidence is uneven.** c=64 has 30 minutes across two soaks; c=128 has 75
+seconds. Linear scaling with improving latency is good evidence there is no slow
+degradation mechanism, but it is not a soak. Before defaulting production to 128 I
+would run one 20-minute soak there, about $12.
+
+**Quota is shared.** Measured with the project otherwise idle. Concurrency competes
+with anything else running against the same quota, and the 128 optimum is a property of
+this client on this machine, not a universal constant.
+
+**One machine, one process.** The event-loop ceiling depends on CPU and on the Python
+version. It should be re-measured wherever this actually deploys, which is what
+`make calibrate` and this sweep exist for.
+
 ## 7. Cost control *(validated)*
 
 Confirmed rates: **$0.30 / 1M input, $2.50 / 1M output**, thinking billed at the

@@ -37,6 +37,12 @@ Grafana at http://localhost:3000, *Takehome* folder.
 
 ## Three things worth knowing
 
+**The concurrency ceiling is 128, and past it the bottleneck is our own event loop —
+not Vertex.** Throughput scales linearly to 73.7 rps at c=128, then *falls* to 63.0 at
+256 and 43.7 at 1024. Event loop lag goes <5 ms → 457 ms → 4,301 ms while the
+connection pool sits at 50% throughout. Pushing 8x past the optimum delivers 40% less
+work. Scaling further means more processes, not more concurrency. See FINDINGS §6g.
+
 **Sustained load: 47,677 requests over 20.8 minutes at 36.9 rps**, with zero failures
 reaching a caller. Vertex rate-limited 0.038%, all absorbed by retry — visible only
 because retries are hand-rolled rather than delegated to the SDK. The tail is not a

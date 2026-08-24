@@ -73,6 +73,15 @@ class StageResult:
     arrival_rate: float
     duration_s: float
     records: list[RequestRecord] = field(default_factory=list)
+    # Requests completed during warm-up. Kept for cost accounting (they were billed)
+    # but excluded from latency and throughput, because a cold connection pool
+    # measures TLS handshakes rather than the service.
+    warmup_records: list[RequestRecord] = field(default_factory=list)
+    warmup_s: float = 0.0
+
+    @property
+    def all_records(self) -> list[RequestRecord]:
+        return self.warmup_records + self.records
 
     def windows(self, width_s: float = 30.0) -> list[dict[str, Any]]:
         """Bucket the run into fixed windows.
@@ -151,11 +160,15 @@ class StageResult:
                 if self.mode == "open" and self.records else 0.0
             ),
             "retries": sum(max(0, r.attempts - 1) for r in self.records),
-            "cost_usd": round(sum(r.cost_usd for r in self.records), 6),
+            "warmup_s": self.warmup_s,
+            "warmup_requests": len(self.warmup_records),
+            # Cost covers warm-up too: those requests were billed even though they
+            # are excluded from the latency and throughput figures.
+            "cost_usd": round(sum(r.cost_usd for r in self.all_records), 6),
             "tokens": {
-                "input": sum(r.input_tokens for r in self.records),
-                "output": sum(r.output_tokens for r in self.records),
-                "thinking": sum(r.thinking_tokens for r in self.records),
+                "input": sum(r.input_tokens for r in self.all_records),
+                "output": sum(r.output_tokens for r in self.all_records),
+                "thinking": sum(r.thinking_tokens for r in self.all_records),
             },
             "errors_by_class": errors,
             "finish_reasons": finishes,
@@ -217,7 +230,7 @@ async def _one_request(
 async def run_closed_loop(
     provider: LLM, prompts: list[Prompt], governor: CostGovernor,
     *, concurrency: int, requests: int | None = None, duration_s: float | None = None,
-    label: str, progress_every_s: float = 30.0,
+    label: str, progress_every_s: float = 30.0, warmup_s: float = 0.0,
 ) -> StageResult:
     """Hold ``concurrency`` requests in flight.
 
@@ -232,7 +245,7 @@ async def run_closed_loop(
 
     stage = StageResult(
         label=label, mode="closed", concurrency=concurrency, arrival_rate=0.0,
-        duration_s=0.0,
+        duration_s=0.0, warmup_s=warmup_s,
     )
     stopped = asyncio.Event()
     started = time.perf_counter()
@@ -257,7 +270,14 @@ async def run_closed_loop(
                     print(f"\n  budget breaker: {exc}")
                 stopped.set()
                 return
-            stage.records.append(record)
+            # Warm-up requests are billed, so they count for cost, but they are
+            # excluded from the measurement: the first seconds at a new concurrency
+            # are dominated by TLS handshakes and cold pool slots, which is precisely
+            # the artifact that made 8-second stages report throughput 2.5x low.
+            if warmup_s and (time.perf_counter() - started) < warmup_s:
+                stage.warmup_records.append(record)
+            else:
+                stage.records.append(record)
 
             now = time.perf_counter()
             if progress_every_s and now - last_progress >= progress_every_s:
@@ -265,7 +285,10 @@ async def run_closed_loop(
                 _print_progress(stage, now - started)
 
     await asyncio.gather(*(worker(i) for i in range(concurrency)))
-    stage.duration_s = time.perf_counter() - started
+    elapsed = time.perf_counter() - started
+    # Report the measured window only, so throughput is requests-after-warmup over
+    # seconds-after-warmup rather than a blend of the two regimes.
+    stage.duration_s = max(0.001, elapsed - warmup_s)
     return stage
 
 
@@ -360,6 +383,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--est-output-tokens", type=int, default=200,
                    help="Expected output tokens per request, used for the pre-flight estimate.")
     p.add_argument("--confirm", action="store_true", help="Actually spend money.")
+    p.add_argument("--warmup-s", type=float, default=0.0,
+                   help="Seconds to discard at the start of each stage. Excluded from "
+                        "latency and throughput, still counted for cost. Makes short "
+                        "stages valid by removing TLS and connection-pool warm-up.")
     p.add_argument("--metrics-port", type=int, default=0, help="Serve /metrics for Prometheus.")
     p.add_argument("--out", type=Path, default=Path("results"))
     p.add_argument("--label", default="run")
@@ -433,9 +460,10 @@ async def main_async(args: argparse.Namespace) -> None:
                 if per_stage is not None:
                     print(f"  stage concurrency={value} requests={per_stage} ...", flush=True)
                 else:
+                    warm = f", {args.warmup_s:.0f}s warm-up discarded" if args.warmup_s else ""
                     print(
-                        f"  stage concurrency={value} duration={args.duration}s "
-                        f"(sustained) ...", flush=True
+                        f"  stage concurrency={value} duration={args.duration}s"
+                        f"{warm} ...", flush=True
                     )
                 stage = await run_closed_loop(
                     provider, prompts, governor,
@@ -443,6 +471,7 @@ async def main_async(args: argparse.Namespace) -> None:
                     requests=per_stage,
                     duration_s=None if per_stage is not None else args.duration,
                     label=f"{args.label}-c{int(value)}",
+                    warmup_s=args.warmup_s,
                 )
             else:
                 print(f"  stage arrival_rate={value}/s duration={args.duration}s ...", flush=True)

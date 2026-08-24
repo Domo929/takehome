@@ -281,6 +281,24 @@ generator could not keep up **exits non-zero**. That is the automated check that
 result was not silently rig-bound. On the Python side the equivalent signals are
 `llm_pool_saturation_ratio` and `llm_event_loop_lag_seconds`.
 
+## Finding the concurrency optimum
+
+Short stages are valid if the warm-up is discarded — a cold pool spends its first
+seconds on TLS handshakes, which is what made an earlier 8-second sweep understate
+throughput by 2.5x.
+
+```bash
+python -m harness.run --mode closed \
+  --concurrency 8 16 32 64 96 128 256 \
+  --duration 95 --warmup-s 20 \
+  --budget-usd 12 --confirm --metrics-port 9464
+```
+
+`--warmup-s` excludes the leading window from latency and throughput while still
+counting it for cost. Watch `llm_event_loop_lag_seconds`: while it stays under a few
+milliseconds the vendor is the constraint, and once it climbs into hundreds of
+milliseconds the Python process is. See FINDINGS §6g for the measured curve.
+
 ## Troubleshooting
 
 **k6 reports `dropped_iterations > 0.`** The generator could not sustain the offered

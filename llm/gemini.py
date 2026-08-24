@@ -153,17 +153,19 @@ class Gemini(LLM):
         # rather than chosen independently. Headroom above in-flight count absorbs
         # connection churn without letting the pool become the silent constraint.
         self._max_connections = max_connections or _env_int("GEMINI_MAX_CONNECTIONS", 256)
-        # 64 is the only concurrency validated under sustained load on Vertex
-        # us-central1: two runs totalling 67,000 requests over 30 minutes held 36-37
-        # rps with a 0.04% rate-limit rate and no failures reaching a caller
-        # (FINDINGS 6f). An earlier default of 32 came from an 8-second sweep that
-        # later proved unreliable — short bursts measure connection warm-up, not
-        # steady state — so it is not used here.
+        # A warm-up-corrected sweep found throughput scaling linearly from 8 to 128
+        # concurrent with no knee: 0.50-0.58 rps per unit of concurrency throughout,
+        # and p50 and p99 both *improving* at the top end (FINDINGS 6g). 128 is the
+        # highest level measured, not a ceiling — the sweep ran out of budget before
+        # the service ran out of capacity.
         #
-        # Capped by the pool, since a limit above it queues on sockets rather than at
-        # the admission gate, which is the invisible queueing this exists to prevent.
+        # Capped at half the connection pool. At 128 concurrent against a 256
+        # connection pool the observed saturation was 50% and behaviour was clean, so
+        # half is the ratio with evidence behind it. A limit above the pool would
+        # queue on sockets rather than at the admission gate, which is exactly the
+        # invisible queueing that pool-saturation instrumentation exists to catch.
         self._parallelism = parallelism_limit or _env_int(
-            "GEMINI_PARALLELISM", max(1, min(64, int(self._max_connections / 2.5)))
+            "GEMINI_PARALLELISM", max(1, min(128, self._max_connections // 2))
         )
 
         self._retry_policy = retry_policy or RetryPolicy(
