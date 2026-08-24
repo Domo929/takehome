@@ -72,6 +72,17 @@ class GeminiResponse(LLM.SimpleResponse):
     # different questions -- what the model believes, versus what it can find today --
     # so which condition produced a sample must travel with the sample.
     grounded: bool = False
+
+    # What we asked for, kept separate from what we got. Asking for grounding does not
+    # guarantee it happens: the model may decline to search, or retrieval may fail. If
+    # those two ever diverge, an ungrounded answer is about to be filed as a grounded
+    # measurement, which for brand tracking is silent corruption of the primary signal.
+    grounding_requested: bool = False
+
+    @property
+    def grounding_degraded(self) -> bool:
+        """We asked for live search and did not get it."""
+        return self.grounding_requested and not self.grounded
     # Queries the model actually issued, and the sources it cited. Recorded because a
     # grounded answer without its sources is not reproducible: the web moves, and
     # without the citations there is no way to tell later why an answer changed.
@@ -84,6 +95,13 @@ class GeminiResponse(LLM.SimpleResponse):
     upstream_total_ms: float | None = None
     # Time deliberately spent sleeping between attempts.
     retry_backoff_ms: float = 0.0
+
+    # Worst-case cost of attempts that failed after the vendor had already done
+    # billable work. We cannot see usage metadata on a failed attempt, so this is an
+    # upper bound, and it is deliberately an upper bound: a spend breaker that
+    # under-counts is not a breaker. Negligible ungrounded, material when a grounded
+    # request at ~88x the token cost is retried up to four times.
+    unbilled_attempt_cost_usd: float = 0.0
     attempts: int = 1
     model: str | None = None
     provider: str | None = None

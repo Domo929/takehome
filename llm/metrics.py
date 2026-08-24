@@ -102,6 +102,24 @@ empty_responses_total = Counter(
     registry=REGISTRY,
 )
 
+grounding_degraded_total = Counter(
+    "llm_grounding_degraded_total",
+    "Requests that asked for live search and came back without it. These succeed, so "
+    "nothing else surfaces them, but each one is an ungrounded answer about to be "
+    "recorded as a grounded measurement.",
+    ["provider", "model"],
+    registry=REGISTRY,
+)
+
+unbilled_attempt_cost_usd = Counter(
+    "llm_unbilled_attempt_cost_usd_total",
+    "Upper-bound cost of attempts that failed after the vendor may already have done "
+    "billable work. Invisible to usage metadata, so the spend breaker would otherwise "
+    "under-count. Negligible for token-only requests; material for grounded ones.",
+    ["provider", "model"],
+    registry=REGISTRY,
+)
+
 event_loop_lag = Gauge(
     "llm_event_loop_lag_seconds",
     "Scheduling delay observed by a fixed-interval probe. Rising lag means the "

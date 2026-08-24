@@ -64,6 +64,8 @@ from .metrics import (
     adaptive_limit,
     adaptive_short_rtt,
     empty_responses_total,
+    grounding_degraded_total,
+    unbilled_attempt_cost_usd,
     inflight_requests,
     pool_saturation_ratio,
     pool_size,
@@ -74,7 +76,7 @@ from .metrics import (
     spend_usd_total,
     tokens_total,
 )
-from .pricing import cost_usd
+from .pricing import cost_usd, grounding_cost_usd
 from .retry import RetryBudget, RetryOutcome, RetryPolicy, parse_retry_after, with_retries
 
 _PROVIDER = "gemini"
@@ -402,9 +404,11 @@ class Gemini(LLM):
         # whether the model changed or the web did.
         search_queries: list[str] = []
         sources: list[str] = []
+        actually_grounded = False
         if candidates:
             gm = getattr(candidates[0], "grounding_metadata", None)
             if gm is not None:
+                actually_grounded = True
                 search_queries = list(getattr(gm, "web_search_queries", None) or [])
                 for chunk in getattr(gm, "grounding_chunks", None) or []:
                     web = getattr(chunk, "web", None)
@@ -420,16 +424,35 @@ class Gemini(LLM):
         if cached:
             metadata["cached_input_tokens"] = cached
 
+        # Bill on what happened, not what was asked. Google charges the search SKU
+        # when a search runs; a request that asked for grounding and did not get it
+        # should not be charged for retrieval that never occurred.
         cost = cost_usd(
-            self._model, input_tokens, output_tokens, cached, grounded=self._grounded
+            self._model, input_tokens, output_tokens, cached, grounded=actually_grounded
         )
+
+        if self._grounded and not actually_grounded:
+            # Loud on purpose. This is the failure that corrupts the measurement
+            # rather than breaking the request, so it must never be inferred from
+            # absence of an error.
+            grounding_degraded_total.labels(provider=_PROVIDER, model=self._model).inc()
+            logger.warning(
+                "grounding requested but absent from response",
+                extra={
+                    "provider": _PROVIDER,
+                    "model": self._model,
+                    "location": self._location,
+                    "finish_reason": str(finish_reason),
+                },
+            )
 
         return GeminiResponse(
             answer=answer,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             thinking_tokens=thinking,
-            grounded=self._grounded,
+            grounded=actually_grounded,
+            grounding_requested=self._grounded,
             search_queries=search_queries,
             grounding_sources=sources,
             finish_reason=finish_reason,
@@ -540,6 +563,17 @@ class Gemini(LLM):
                 elapsed = time.perf_counter() - started
                 outcome_tracker.upstream_s += elapsed
                 translated = self._translate(exc)
+                if self._grounded:
+                    # A grounded attempt that reached the vendor may have run its
+                    # search before failing, and search bills per prompt regardless of
+                    # whether generation completed. We cannot tell from here, so we
+                    # assume the expensive case. Ungrounded this would be rounding
+                    # error; grounded it is ~88x the token cost, four attempts deep.
+                    fee = grounding_cost_usd(1)
+                    outcome_tracker.unbilled_cost_usd += fee
+                    unbilled_attempt_cost_usd.labels(
+                        provider=_PROVIDER, model=self._model
+                    ).inc(fee)
                 self._observe(translated, elapsed)
                 raise translated from exc
             finally:
@@ -629,4 +663,9 @@ class Gemini(LLM):
         result.attempts = outcome_tracker.attempts
         result.upstream_total_ms = outcome_tracker.upstream_s * 1000.0
         result.retry_backoff_ms = outcome_tracker.backoff_s * 1000.0
+        # Roll failed-attempt billing into the reported cost so the spend breaker and
+        # every downstream ledger see the true worst case rather than the cost of the
+        # one attempt that happened to succeed.
+        result.unbilled_attempt_cost_usd = outcome_tracker.unbilled_cost_usd
+        result.cost_usd += outcome_tracker.unbilled_cost_usd
         return result

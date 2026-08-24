@@ -90,3 +90,67 @@ async def test_grounding_and_thinking_are_independent(fake_vertex):
             d = provider.describe()
             assert d["grounded"] is grounded
             assert d["thinking_budget"] == budget
+
+
+async def test_grounding_can_fail_silently_and_we_notice(fake_vertex):
+    """The dangerous grounding failure is the one that returns HTTP 200.
+
+    If retrieval fails or the model declines to search, the request still succeeds and
+    still returns a plausible answer. Nothing raises. For a product whose entire signal
+    is the difference between the grounded and ungrounded conditions, quietly filing an
+    ungrounded answer as a grounded one corrupts the measurement in the direction that
+    is hardest to detect later.
+
+    So `grounded` must report what came back, not what was asked for.
+    """
+    fake_vertex.configure(grounding_failure_rate=1.0)
+    try:
+        provider = build(fake_vertex, grounded=True)
+        result = await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+        assert result.answer, "request should still succeed - that is the problem"
+        assert result.grounding_requested is True
+        assert result.grounded is False, "grounded must reflect the response"
+        assert result.grounding_degraded is True
+        assert result.grounding_sources == []
+    finally:
+        fake_vertex.configure(grounding_failure_rate=0.0)
+
+
+async def test_degraded_grounding_is_not_billed_for_search(fake_vertex):
+    """No search ran, so no search fee. Billing the request would inflate the ledger."""
+    fake_vertex.configure(grounding_failure_rate=1.0)
+    try:
+        provider = build(fake_vertex, grounded=True)
+        result = await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+        assert result.cost_usd < GROUNDING_USD_PER_1K_PROMPTS / 1000.0
+    finally:
+        fake_vertex.configure(grounding_failure_rate=0.0)
+
+
+async def test_failed_grounded_attempts_are_counted_against_the_budget(fake_vertex):
+    """A grounded attempt that fails may still have run - and been billed for - a search.
+
+    Failed attempts carry no usage metadata, so the cost of a retried grounded request
+    is invisible if only the successful attempt is counted. Ungrounded that is a
+    rounding error. Grounded, at ~88x the token cost and up to four attempts, it is the
+    difference between a spend breaker that works and one that reports a number it
+    would like to be true.
+    """
+    fake_vertex.configure(server_error_probability=1.0)
+    try:
+        provider = build(fake_vertex, grounded=True)
+        with pytest.raises(Exception):
+            await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+    finally:
+        fake_vertex.configure(server_error_probability=0.0)
+
+    from llm.metrics import REGISTRY
+
+    charged = REGISTRY.get_sample_value(
+        "llm_unbilled_attempt_cost_usd_total",
+        {"provider": "gemini", "model": "gemini-2.5-flash"},
+    )
+    assert charged is not None and charged > 0, (
+        "failed grounded attempts must reach the spend accounting"
+    )

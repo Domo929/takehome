@@ -67,6 +67,10 @@ class Behavior:
     # grounded or not, so retrieval is priced entirely in the per-prompt SKU. What does
     # change is the answer: grounded responses ran 1.9x longer, which is what drives
     # the truncation risk.
+    # Fraction of grounded requests that come back 200 OK with no groundingMetadata:
+    # the model declined to search, or retrieval failed. Real and untestable against
+    # the vendor on demand, which is exactly why the mock has to be able to produce it.
+    grounding_failure_rate: float = 0.0
     grounding_latency_s: float = 2.4
     grounding_output_token_multiplier: float = 1.9
 
@@ -345,12 +349,14 @@ def create_app(behavior: Behavior | None = None) -> FastAPI:
                 )
 
             state.note("grounded" if grounded else ("truncated" if truncated else "ok"))
+
             candidate: dict[str, Any] = {
                 "finishReason": "MAX_TOKENS" if truncated else "STOP",
                 "index": 0,
                 "content": {"role": "model", "parts": [{"text": _make_text(visible)}]},
             }
-            if grounded:
+            grounding_ran = grounded and rng.random() >= b.grounding_failure_rate
+            if grounding_ran:
                 candidate["groundingMetadata"] = {
                     "webSearchQueries": ["best robot vacuum brands 2026"],
                     "groundingChunks": [
@@ -377,6 +383,7 @@ def create_app(behavior: Behavior | None = None) -> FastAPI:
 def build_behavior_from_env() -> Behavior:
     b = Behavior()
     float_fields = (
+        "grounding_failure_rate",
         "grounding_latency_s", "grounding_output_token_multiplier",
         "base_latency_s", "latency_sigma", "per_output_token_s", "inflation_factor",
         "rate_limit_probability", "server_error_probability", "empty_probability",
