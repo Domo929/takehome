@@ -850,26 +850,99 @@ Splitting the run in half:
 | **p99** | **5,106 ms** | **6,996 ms** | **+37.0%** |
 
 Throughput and p50 are essentially flat — 5.1% coefficient of variation across
-eighteen windows, and a −0.26 rps-per-window trend that is within noise. **The tail is
-not flat.** p99 grew 37% while p50 moved 2.7%, which is the signature of a queue
-forming somewhere upstream: most requests are unaffected while an increasing minority
-wait.
+eighteen windows, and a −0.26 rps-per-window trend that is within noise. p99 rose 37%
+over the same period, which looked like a queue forming upstream.
 
-That trend is the single best argument for the longer run the budget cut short. Eight
-minutes shows the tail growing; it cannot show where it stops.
+**It was not.** A longer run refutes this; see below. I have left the observation in
+place rather than quietly deleting it, because the mistake is the useful part.
+
+### The p99 growth was not real — a 21-minute run refutes the 8.7-minute one
+
+The shorter run showed p99 rising 37% while p50 stayed flat, and I read that as a
+queue forming upstream. It seemed like the most interesting result in the section.
+
+It does not replicate. A second run at identical settings, stopped by a $20 breaker
+after **20.8 minutes and 47,677 requests**:
+
+| Quarter | Throughput | p50 | p99 |
+|---|---|---|---|
+| Q1 (0–5 min) | 38.1 rps | 1,376 ms | 4,934 ms |
+| Q2 (5–10 min) | 38.7 rps | 1,346 ms | 4,758 ms |
+| Q3 (10–16 min) | 34.4 rps | 1,429 ms | **6,574 ms** |
+| Q4 (16–21 min) | 35.4 rps | 1,395 ms | **4,966 ms** |
+
+p99 climbs into Q3 and then **comes back down**. Across 42 windows it oscillates
+between 3,749 ms and 9,561 ms — a 2.55x range — with a linear trend of +20.8 ms per
+window against a standard deviation of 1,798 ms. The trend is a rounding error next to
+the noise.
+
+The decisive comparison: the largest swing between adjacent 4-window blocks *within
+this run* is **+81%**. My earlier "+37% trend" is comfortably inside the normal
+oscillation of this workload. I was fitting a line to a wave and reporting the slope.
+
+**What I actually had was a sampling artifact**, and 8.7 minutes was not long enough to
+see it. That is the same lesson as the 8-second tests, one order of magnitude up: the
+first mistake was measuring for less time than the quota window, and this one was
+measuring for less time than the tail's own period.
+
+### What the tail actually is: transient vendor events, not a queue
+
+The dashboard makes the mechanism obvious in a way the aggregate does not. p99 sits
+near 4.7 s for most of the run, then spikes to 9.5 s between roughly t+750 s and
+t+900 s, then returns. **The retry series spikes over exactly the same window**, and
+throughput dips from ~37 rps to ~28 rps.
+
+Splitting the 42 windows by whether any retry occurred:
+
+| | Windows | Mean p99 |
+|---|---|---|
+| With retries | 11 | **6,910 ms** |
+| Without retries | 31 | **4,717 ms** |
+
+A 47% difference in tail latency, cleanly separated by whether Vertex was pushing back
+in that window. So the tail is not a queue growing inside our process — it is **Vertex
+having transient degradation episodes lasting a couple of minutes**, during which
+latency inflates, a handful of requests are rate-limited or 5xx, and the retry engine
+absorbs them.
+
+That reframes the operational advice. The tail is not something to tune away; it is a
+property of shared quota. What matters is that the client survives those episodes,
+which it does: 47,677 requests, 24 retries, **zero failures reaching a caller**.
+
+### What held up across both runs
+
+The metrics that were stable are stable in both, which is what makes the retraction
+credible rather than merely convenient:
+
+| | 8.7-min run | 20.8-min run |
+|---|---|---|
+| Requests | 19,223 | **47,677** |
+| Sustained throughput | 35.6 rps | 36.9 rps |
+| p50 | 1,401 ms | 1,379 ms |
+| Rate-limit rate | 0.042% (8) | **0.038% (18)** |
+| Truncation at 512 cap | 3.3% | **3.3%** |
+| Pool saturation peak | 25% | 25% |
+| Event loop lag peak | 4.7 ms | <5 ms |
+
+Two independent runs agreeing to three significant figures on truncation and to within
+10% on rate-limit rate is the part I would stake a production decision on. Throughput
+of ~37 rps at concurrency 64, p50 ~1.4 s, and a rate-limit rate under 0.05% at ~2,200
+requests/minute are settled.
+
+**p99 is not settled and should be quoted as a range**, roughly 3.7–9.6 s, rather than
+as a single number. For a batch workload that is acceptable; for anything with a tail
+SLA it would need provisioned throughput rather than shared quota.
 
 ### What this still does not settle
 
-The run ended at the $8 ceiling, not at a natural conclusion. Two things remain open:
+**Dynamic Shared Quota volatility.** Two runs twelve minutes apart is not a test of
+capacity moving across hours or across a business-hours boundary, which is the actual
+justification for the adaptive limiter in §6b. Both runs saw the same ceiling, which is
+weak evidence *against* volatility on this timescale.
 
-**Dynamic Shared Quota volatility.** Eight minutes at a steady rate does not show
-capacity *moving*, which is the actual justification for the adaptive limiter in §6b.
-A run across hours, ideally spanning a business-hours boundary, would settle whether a
-fixed limit is sufficient.
-
-**Where the tail stops growing.** p99 was still climbing at 8.7 minutes. Whether it
-plateaus, or continues, decides whether this configuration is safe for a sweep that
-runs for an hour.
+Given that, the honest recommendation is now: **use a fixed limit at the measured knee
+and treat the adaptive limiter as optional.** It is off by default, it is tested, and
+the case for enabling it needs evidence that has not been gathered.
 
 ### A confounder I created and removed
 

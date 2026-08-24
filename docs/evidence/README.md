@@ -14,7 +14,7 @@ hand-captured.
 
 | File | What it shows |
 |---|---|
-| `soak-evidence.png` | The 8.7-minute sustained run against Vertex us-central1: 19,223 requests at 35.6 rps. Only `llm_*` panels, because the run drove the provider directly. |
+| `soak-evidence.png` | The final 20.8-minute validation run against Vertex us-central1: 47,677 requests at 36.9 rps. The p99 spike near 21:42 lines up with the retry spike below it — that correlation is the evidence the tail is a vendor event, not a queue in our process. Only `llm_*` panels, because the run drove the provider directly. |
 | `overview.png` | The full 45-panel dashboard. Service and k6 panels are empty for this window by design — see below. |
 | `cost.png` | Spend, burn rate and cost per usable answer. |
 

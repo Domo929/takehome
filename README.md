@@ -37,11 +37,13 @@ Grafana at http://localhost:3000, *Takehome* folder.
 
 ## Three things worth knowing
 
-**Sustained load: 19,223 requests over 8.7 minutes at 35.6 rps.** Vertex rate-limited
-8 of them (0.042%), all recovered by retry — visible only because retries are
-hand-rolled rather than delegated to the SDK. Connection pool peaked at 25% and event
-loop lag at 4.7 ms, so the ceiling is server-side, not ours. Earlier 8-second tests
-understated throughput by 2.5x. See FINDINGS §6f and
+**Sustained load: 47,677 requests over 20.8 minutes at 36.9 rps**, with zero failures
+reaching a caller. Vertex rate-limited 0.038%, all absorbed by retry — visible only
+because retries are hand-rolled rather than delegated to the SDK. The tail is not a
+queue in our process: p99 spikes correlate with vendor retry events (6,910 ms in
+windows with retries vs 4,717 ms without) while the connection pool sat at 25% and
+event loop lag under 5 ms. An apparent p99 trend in a shorter run **did not replicate
+and is retracted**. See FINDINGS §6f and
 [docs/evidence/](docs/evidence/soak-evidence.png).
 
 **Logprobs are free and reveal brands that 100 samples miss.** Token counts are

@@ -1,6 +1,6 @@
 {
   "uid": "takehome-soak-evidence",
-  "title": "Soak Evidence \u2014 Vertex us-central1",
+  "title": "Soak Evidence \u2014 Vertex us-central1 (final validation)",
   "tags": [
     "takehome",
     "evidence"
@@ -55,7 +55,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "**19,223 requests over 8.7 minutes at 35.6 rps sustained**, peaking at 2,362 requests/minute. Vertex returned **8 rate-limit responses (0.042%)**, all recovered by retry, so zero reached a caller. Connection pool peaked at 25% and event loop lag at 4.7 ms, so the throughput ceiling and the p99 growth visible here are **server-side, not ours**. Driven by `harness/run.py` calling the provider directly, so only `llm_*` metrics populate."
+        "content": "**47,677 requests over 20.8 minutes at 36.9 rps sustained**, ~2,217 requests/minute. Vertex rate-limited **18 (0.038%)**, all recovered by retry. Connection pool peaked at 25% and event loop lag under 5 ms, so the ceiling is **server-side**. p99 oscillates between 3.7 s and 9.6 s with no systematic trend \u2014 an apparent +37% rise in an earlier 8.7-minute run did not replicate here and is retracted. Driven by `harness/run.py` directly, so only `llm_*` metrics populate."
       }
     },
     {
