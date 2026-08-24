@@ -5,7 +5,7 @@ PY := .venv/bin/python
 K6 := k6
 export PYTHONPATH := .
 
-.PHONY: help venv vertex-check preflight test calibrate auth-check service-up service-down overhead capacity run runs adaptive-demo cost-model mock-up mock-down obs-up obs-down obs-logs \
+.PHONY: help venv vertex-check preflight test calibrate auth-check service-up service-down overhead capacity run runs adaptive-demo cost-model spend mock-up mock-down obs-up obs-down obs-logs \
         k6-smoke k6-ramp k6-constant sweep-mock pool-experiment clean
 
 help:
@@ -100,6 +100,9 @@ capacity: ## Find where our service sheds load
 		TARGET=service SCENARIO=constant RATE=$$R DURATION=20s MAX_VUS=1200 \
 			$(K6) run --quiet loadtest/k6/gemini.js 2>&1 | grep -E "p50=|requests="; \
 	done
+
+spend: ## Report actual spend to date, split by whose account paid
+	@$(PY) scripts/spend_report.py
 
 cost-model: ## Project cost at a given daily volume (ARGS="--daily 50000")
 	$(PY) scripts/cost_model.py $(ARGS)

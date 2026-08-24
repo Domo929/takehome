@@ -213,6 +213,21 @@ The service was answering in a flat 500 ms throughout. At pool=8 the client repo
 vendor's response indicates it — which is why `llm_pool_saturation_ratio` is a
 first-class metric rather than a debug print.
 
+## Spend accountability
+
+Experiments run against Evertune's project spend their money, so the total is tracked
+rather than recalled:
+
+```bash
+make spend
+```
+
+It reads every run manifest and reports actual cost from reported `usage_metadata`,
+split by which account paid. Ad-hoc probes made outside the harness produce no
+manifest, so they are declared explicitly in `scripts/spend_report.py` rather than
+silently omitted — a total that quietly excludes untracked calls is wrong in the
+flattering direction.
+
 ## Rig calibration: proving the harness is not the bottleneck
 
 Any added component between the generator and the vendor can silently become the
