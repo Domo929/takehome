@@ -9,11 +9,19 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
-  # The Python harness (the subject under test). Scraped at 2s because load stages
-  # are short and a 15s interval would alias the interesting transitions.
+  # The integration service - the system under test. Scraped at 2s because load
+  # stages are short and a 15s interval would alias the interesting transitions.
+  - job_name: gemini-service
+    scrape_interval: 2s
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
+        labels:
+          component: service
+
+  # The in-process batch harness, when it is run with --metrics-port.
   - job_name: llm-harness
     scrape_interval: 2s
     static_configs:
       - targets: ["host.docker.internal:9464"]
         labels:
-          harness: python
+          component: batch-harness

@@ -55,6 +55,7 @@ from llm.gemini import Gemini
 from llm.metrics import (
     REGISTRY,
     EventLoopLagMonitor,
+    budget_remaining_usd,
     service_admission_rejected_total,
     service_inflight,
     service_overhead_seconds,
@@ -90,6 +91,11 @@ class ServiceState:
         self.lag = EventLoopLagMonitor()
         self.inflight = 0
         self.capacity = 0
+        # Optional spend ceiling. A long-running service pointed at a metered API
+        # should be able to stop itself; without this a runaway loop bills until
+        # someone notices. Unset means no ceiling.
+        self.budget_usd = float(os.getenv("SERVICE_BUDGET_USD", "0") or 0)
+        self.spent_usd = 0.0
 
 
 state = ServiceState()
@@ -103,6 +109,8 @@ async def lifespan(app: FastAPI):
     state.provider = Gemini()
     state.capacity = int(os.getenv("SERVICE_CAPACITY", state.provider.parallelism()))
     state.gate = asyncio.Semaphore(state.capacity)
+    if state.budget_usd > 0:
+        budget_remaining_usd.set(state.budget_usd)
     state.lag.start()
     yield
     await state.lag.stop()
@@ -134,6 +142,17 @@ async def ask(payload: AskRequest) -> JSONResponse:
         return JSONResponse({"error": "service not ready"}, status_code=503)
 
     started = time.perf_counter()
+
+    if state.budget_usd > 0 and state.spent_usd >= state.budget_usd:
+        service_requests_total.labels(outcome="over_budget", finish_reason="").inc()
+        return JSONResponse(
+            {
+                "error": "spend ceiling reached",
+                "spent_usd": round(state.spent_usd, 6),
+                "budget_usd": state.budget_usd,
+            },
+            status_code=503,
+        )
 
     # Shed rather than queue without bound. Checked before awaiting so a saturated
     # service rejects immediately instead of growing an invisible backlog.
@@ -197,6 +216,10 @@ async def ask(payload: AskRequest) -> JSONResponse:
 
     total = time.perf_counter() - started
     upstream_s = (result.latency_ms or 0.0) / 1000.0
+
+    if state.budget_usd > 0:
+        state.spent_usd += result.cost_usd or 0.0
+        budget_remaining_usd.set(max(0.0, state.budget_usd - state.spent_usd))
 
     # The headline number: everything that was not waiting on Vertex. Framework,
     # validation, JSON, event-loop scheduling, admission queueing.

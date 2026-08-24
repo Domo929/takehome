@@ -39,8 +39,27 @@ make sweep-mock    # closed-loop sweep, metrics on :9464
 make k6-constant   # k6 control at 20 rps, remote-writes to Prometheus
 ```
 
-Grafana has three dashboards under the *Takehome* folder: **Live Run**, **Cost &
-Burn**, and **Subject vs Control**.
+Grafana serves **Gemini Integration — Overview** from the *Takehome* folder: 44
+panels covering every metric the system emits, organized by the question each answers.
+
+| Section | Answers |
+|---|---|
+| Health check | Is it up, fast, failing, and what is it costing right now? |
+| Latency layers | Where does the time go? Stacked `queue_wait + upstream + framework`. |
+| Throughput and outcomes | What is succeeding, failing, being shed, retried, or truncated? |
+| Cost | Burn rate, cost per *usable* answer, time to budget exhaustion. |
+| Token usage | Input vs visible output vs thinking, and thinking's share of the bill. |
+| Saturation and capacity | Pool saturation, event-loop lag: is the ceiling us or the vendor? |
+| Load generator | Did k6 keep up? Non-zero dropped iterations invalidates the run. |
+
+The dashboard is generated, not hand-edited — 44 panels means the grid layout is
+easier to compute than to maintain by hand:
+
+```bash
+python observability/build_dashboards.py   # then commit the output
+```
+
+**Cost & Burn** remains as a focused drill-down for long runs.
 
 ## Cost controls
 
