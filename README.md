@@ -37,6 +37,12 @@ Grafana at http://localhost:3000, *Takehome* folder.
 
 ## Three things worth knowing
 
+**Two endpoints, one provider.** Gemini is served by both the Gemini Developer API
+(API key, fixed published quota) and Vertex AI (GCP project, Dynamic Shared Quota).
+`GEMINI_BACKEND` selects. All live measurements so far used the Developer API; Vertex
+is the target and needs credentials. Model behaviour transfers between them, capacity
+numbers do not. See FINDINGS §0.
+
 **Concurrency adapts to available capacity.** `parallelism()` as a constant assumes a
 ceiling you can discover once; Dynamic Shared Quota moves. The controller keys on
 latency rather than error codes, because Vertex absorbs overload by slowing down

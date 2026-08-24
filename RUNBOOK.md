@@ -124,9 +124,17 @@ Cost reconciliation
 
 ## Pointing at a real endpoint
 
-Two backends are supported. They are **not** interchangeable for capacity work:
-different quota pools, different endpoints, different scaling. Numbers from the
-developer API are a functional smoke test, not scale evidence.
+Two backends are supported, and they are **not** interchangeable for capacity work:
+
+| | Developer API | Vertex AI |
+|---|---|---|
+| host | `generativelanguage.googleapis.com` | `aiplatform.googleapis.com` |
+| auth | API key | ADC + GCP project |
+| quota | fixed, published per tier | Dynamic Shared Quota, unpublished |
+
+Same model, same contract, different serving tiers. Numbers from the Developer API are
+a functional smoke test and a valid source of *model* behaviour; they are not scale
+evidence for Vertex.
 
 **Vertex (the production target).**
 

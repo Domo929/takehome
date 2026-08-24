@@ -17,6 +17,42 @@
 > measurements.
 ---
 
+## 0. Two different Google endpoints serve this model
+
+Worth stating plainly, because the distinction decides which numbers transfer and
+which do not, and "the Google API" is ambiguous between them.
+
+| | Gemini Developer API | Vertex AI |
+|---|---|---|
+| Endpoint | `generativelanguage.googleapis.com` | `aiplatform.googleapis.com` |
+| Auth | API key | ADC / service account + a GCP project |
+| Quota | **Fixed and published per tier**, enforced with 429s | **Dynamic Shared Quota** — not published, varies by region, load and time |
+| Capacity guarantees | none | optional Provisioned Throughput |
+| Used here so far | **yes** — all live measurements | **not yet** — needs Evertune's project |
+
+Both speak the same model and the same `generateContent` contract, which is why one
+provider can target either (`GEMINI_BACKEND=developer|vertex`). They are not
+interchangeable for capacity work: different quota pools, different endpoints,
+different scaling behaviour.
+
+**Everything measured in this document so far used the Developer API.** The take-home
+targets Vertex, and the harness is built for it, but I have not had credentials for a
+Vertex project. Where a finding is a property of the *model* — token economics,
+thinking behaviour, finish reasons, payload validation — it transfers. Where a finding
+is a property of the *serving tier* — throughput ceilings, where 429s begin, tail
+latency under saturation — it does not, and I have marked those as pending rather than
+presenting Developer API numbers as Vertex capacity.
+
+### What our own key allows
+
+Probing the key used for these measurements: **200 concurrent requests, 200 successes,
+zero 429s, ~31 rps sustained.** I stopped there rather than hunting the ceiling, since
+it is a personal key with a daily cap. That is well above the free tier (single-digit
+RPM), so the measurements here were not distorted by throttling — but it also means
+this key's ceiling is unknown, and no throughput claim in this document rests on it.
+
+---
+
 ## 1. The model retires in seven weeks
 
 Gemini 2.5 Flash on Vertex is scheduled for retirement on **2026-10-16**, confirmed
@@ -340,9 +376,14 @@ load test flatters the system it is measuring.
 ## 6b. Adaptive concurrency: when it wins, and when it does not *(validated)*
 
 `parallelism()` returning a constant assumes capacity is a property you can discover
-once. Vertex governs Gemini with Dynamic Shared Quota, which has no published
-per-project ceiling and moves with regional demand, so any constant is a guess with a
-shelf life.
+once. **On Vertex that assumption fails**: Gemini there is governed by Dynamic Shared
+Quota, which publishes no per-project ceiling and moves with regional demand, so any
+constant is a guess with a shelf life.
+
+Note the asymmetry with the Developer API (§0), where quota *is* fixed and published
+per tier. Adaptive limiting is therefore a Vertex-motivated feature. Against a fixed,
+knowable limit a tuned constant is the simpler and better answer, which is part of why
+this is off by default.
 
 `llm/adaptive.py` replaces the guess with a controller. Two design points matter:
 
@@ -413,7 +454,14 @@ genuinely free, fixed-high is defensible.
 
 The honest summary: **against constant capacity a well-tuned fixed limit is fine, and
 this is not worth the machinery.** It earns its place when capacity moves, which is
-the situation Dynamic Shared Quota creates by definition.
+what Dynamic Shared Quota means — and that is a Vertex property, not a Gemini one. On
+the Developer API, where limits are published per tier, I would not enable this.
+
+One caveat on the evidence: the capacity change here was *simulated* by reconfiguring
+the fake backend. It is a fair test of the controller's dynamics, but it is not
+evidence that Vertex's quota actually moves on the timescale modelled. Confirming that
+needs a real project, and would change the recommendation if it turned out DSQ is
+stable in practice for a single tenant.
 
 ### Caveat on the shed counts
 
