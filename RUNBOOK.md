@@ -61,6 +61,37 @@ python observability/build_dashboards.py   # then commit the output
 
 **Cost & Burn** remains as a focused drill-down for long runs.
 
+### Finding a specific run
+
+Grafana works in a rolling time window, which suits live monitoring but not discrete
+load tests — after a few runs you are hunting for which 45-second slice was the ramp.
+Run k6 through the wrapper and each run is recorded:
+
+```bash
+make run ARGS="--scenario ramp --target service"
+make run ARGS="--scenario constant --rate 40 --duration 30s --note 'pool=16'"
+make runs      # list recorded runs with deep links
+```
+
+Each run then shows up three ways:
+
+- **A shaded band on every time series**, so a latency spike is attributable to a
+  specific configuration rather than to an unlabelled moment in time.
+- **In the "Recent runs" panel** at the top. Clicking an entry re-windows the whole
+  dashboard to that run. Entries carry request count, p99 and cost, e.g.
+  `spike ->service burst — 2769 req, p99 1350ms, $1.0355`.
+- **As a deep link** printed on completion and stored in `results/runs.jsonl`, so a
+  run can be revisited from a terminal or pasted into a PR.
+
+Leaving the dashboard on `now-15m` with a 5s refresh gives the live view; no run
+selection is needed for that.
+
+**Limitation worth knowing:** Grafana cannot auto-select "the latest run" on load
+without a plugin — a dashboard opens on whatever time range its URL specifies. The
+click-to-window panel and the printed deep link are the practical substitutes. If
+that became a real irritation, the honest fix is a tiny redirect endpoint that reads
+the last line of `results/runs.jsonl` and 302s to the windowed URL.
+
 ## Cost controls
 
 Spending happens against someone else's cloud project, so the guards are mechanical

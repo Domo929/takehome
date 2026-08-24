@@ -5,7 +5,7 @@ PY := .venv/bin/python
 K6 := k6
 export PYTHONPATH := .
 
-.PHONY: help venv preflight test calibrate auth-check service-up service-down overhead capacity mock-up mock-down obs-up obs-down obs-logs \
+.PHONY: help venv preflight test calibrate auth-check service-up service-down overhead capacity run runs mock-up mock-down obs-up obs-down obs-logs \
         k6-smoke k6-ramp k6-constant sweep-mock pool-experiment clean
 
 help:
@@ -97,6 +97,15 @@ capacity: ## Find where our service sheds load
 		TARGET=service SCENARIO=constant RATE=$$R DURATION=20s MAX_VUS=1200 \
 			$(K6) run --quiet loadtest/k6/gemini.js 2>&1 | grep -E "p50=|requests="; \
 	done
+
+run: ## Run k6 + record the run so the dashboard can jump to it (ARGS="--scenario ramp")
+	$(PY) scripts/k6run.py $(ARGS)
+
+runs: ## List recorded runs with their dashboard links
+	@$(PY) -c "import json,pathlib; \
+	p=pathlib.Path('results/runs.jsonl'); \
+	rows=[json.loads(l) for l in p.read_text().splitlines()] if p.exists() else []; \
+	print('no runs recorded yet') if not rows else [print(f\"{r['label']:<44} {r['duration_s']:>6.1f}s  http://localhost:3000/d/takehome-overview/?from={r['from_ms']}&to={r['to_ms']}\") for r in rows[-15:]]"
 
 k6-smoke: ## k6 smoke test against the mock
 	TARGET=mock SCENARIO=smoke $(K6) run --quiet loadtest/k6/gemini.js

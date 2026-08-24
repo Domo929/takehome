@@ -142,6 +142,30 @@ def text(title: str, content: str, x: int, y: int, w=24, h=3) -> dict:
     }
 
 
+def annolist(title: str, x: int, y: int, w=24, h=8, desc="") -> dict:
+    return {
+        "id": nid(),
+        "type": "annolist",
+        "title": title,
+        "description": desc,
+        "gridPos": {"h": h, "w": w, "x": x, "y": y},
+        "options": {
+            "onlyFromThisDashboard": True,
+            "onlyInTimeRange": False,
+            "tags": ["k6run"],
+            "limit": 25,
+            "showTags": True,
+            "showTime": True,
+            "showUser": False,
+            # Clicking an entry re-windows the dashboard around that run. The small
+            # padding keeps ramp-up and drain visible instead of clipping them.
+            "navigateToPanel": False,
+            "navigateBefore": "15s",
+            "navigateAfter": "15s",
+        },
+    }
+
+
 GREEN_RED = [{"color": "green", "value": None}, {"color": "red", "value": 1}]
 RED_GREEN = [{"color": "red", "value": None}, {"color": "green", "value": 1}]
 
@@ -180,6 +204,13 @@ panels += [
               "orange under 25%, yellow under 50%."),
 ]
 y += 4
+
+panels.append(annolist(
+    "Recent runs — click one to window the dashboard to it", 0, y, h=7,
+    desc="Each entry is a k6 run recorded by scripts/k6run.py. Clicking re-windows "
+         "every panel to that run. Runs also appear as shaded regions on the time "
+         "series below, so a spike can be attributed to a specific configuration."))
+y += 7
 
 # ------------------------------------------------------------- latency layers
 panels.append(row("Latency layers — where the time actually goes", y))
@@ -408,6 +439,34 @@ dashboard = {
     "version": 1,
     "refresh": "5s",
     "time": {"from": "now-30m", "to": "now"},
+    "annotations": {
+        "list": [
+            {
+                "builtIn": 1,
+                "name": "Annotations & Alerts",
+                "type": "dashboard",
+                "iconColor": "rgba(0, 211, 255, 1)",
+                "enable": True,
+                "hide": True,
+            },
+            {
+                # Shaded band per load-test run, drawn on every time series so a
+                # spike is attributable to a configuration rather than to an
+                # unlabelled moment.
+                "name": "Load test runs",
+                "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+                "iconColor": "rgba(255, 152, 0, 0.9)",
+                "enable": True,
+                "hide": False,
+                "target": {
+                    "type": "dashboard",
+                    "limit": 50,
+                    "matchAny": False,
+                    "tags": ["k6run"],
+                },
+            },
+        ]
+    },
     "panels": panels,
 }
 
