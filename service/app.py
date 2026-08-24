@@ -105,13 +105,32 @@ state = ServiceState()
 
 
 @asynccontextmanager
+async def _admission(limiter, gate):
+    """Hold an admission permit from whichever gate is in use.
+
+    The adaptive limiter grants its permit in ``try_acquire`` above, so here it only
+    needs releasing; the fixed semaphore is acquired and released normally.
+    """
+    if limiter is not None:
+        try:
+            yield
+        finally:
+            limiter.release()
+    else:
+        async with gate:
+            yield
+
+
+@asynccontextmanager
 async def lifespan(app: FastAPI):
     # One provider per process, so every request shares one connection pool.
     # Constructing per request would defeat pooling and hide the pool ceiling, which
     # is precisely the bug this exercise exists to catch.
     state.provider = Gemini()
     state.capacity = int(os.getenv("SERVICE_CAPACITY", state.provider.parallelism()))
-    state.gate = asyncio.Semaphore(state.capacity)
+    # A fixed semaphore cannot represent a limit that moves, so when adaptive limiting
+    # is enabled the controller owns admission instead.
+    state.gate = None if state.provider.limiter else asyncio.Semaphore(state.capacity)
     if state.budget_usd > 0:
         budget_remaining_usd.set(state.budget_usd)
     state.lag.start()
@@ -125,9 +144,11 @@ app = FastAPI(title="gemini-integration", lifespan=lifespan)
 @app.get("/health")
 async def health() -> dict[str, Any]:
     provider = state.provider
+    limiter = provider.limiter if provider else None
     return {
         "ok": provider is not None,
-        "capacity": state.capacity,
+        "capacity": limiter.limit if limiter else state.capacity,
+        "adaptive": limiter.snapshot() if limiter else None,
         "inflight": state.inflight,
         "provider": provider.describe() if provider else None,
     }
@@ -140,9 +161,11 @@ async def metrics() -> PlainTextResponse:
 
 @app.post("/ask")
 async def ask(payload: AskRequest) -> JSONResponse:
-    provider, gate = state.provider, state.gate
-    if provider is None or gate is None:
+    provider = state.provider
+    if provider is None:
         return JSONResponse({"error": "service not ready"}, status_code=503)
+    limiter = provider.limiter
+    gate = state.gate
 
     started = time.perf_counter()
 
@@ -159,16 +182,20 @@ async def ask(payload: AskRequest) -> JSONResponse:
 
     # Shed rather than queue without bound. Checked before awaiting so a saturated
     # service rejects immediately instead of growing an invisible backlog.
-    if gate.locked():
+    admitted = limiter.try_acquire() if limiter is not None else not gate.locked()
+    if not admitted:
         service_admission_rejected_total.inc()
         service_requests_total.labels(outcome="rejected", finish_reason="").inc()
         return JSONResponse(
-            {"error": "at capacity", "capacity": state.capacity},
+            {
+                "error": "at capacity",
+                "capacity": limiter.limit if limiter else state.capacity,
+            },
             status_code=503,
             headers={"Retry-After": "1"},
         )
 
-    async with gate:
+    async with _admission(limiter, gate):
         queue_wait = time.perf_counter() - started
         service_queue_wait_seconds.observe(queue_wait)
         state.inflight += 1

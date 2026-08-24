@@ -41,6 +41,7 @@ from google.genai import types
 # We pass no tools, so it is pure noise that would drown a load-test log.
 logging.getLogger("google_genai.models").setLevel(logging.ERROR)
 
+from .adaptive import AdaptiveConfig, AdaptiveLimiter, Outcome
 from .errors import (
     LLMAuthenticationError,
     LLMContentBlockedError,
@@ -53,6 +54,11 @@ from .errors import (
 from .llm import LLM
 from .response import FinishReason, GeminiResponse
 from .metrics import (
+    adaptive_baseline_rtt,
+    adaptive_drops_total,
+    adaptive_gradient,
+    adaptive_limit,
+    adaptive_short_rtt,
     empty_responses_total,
     inflight_requests,
     pool_saturation_ratio,
@@ -124,6 +130,8 @@ class Gemini(LLM):
         parallelism_limit: int | None = None,
         retry_policy: RetryPolicy | None = None,
         base_url: str | None = None,
+        adaptive: bool | None = None,
+        adaptive_config: AdaptiveConfig | None = None,
     ) -> None:
         # "vertex" | "developer". Explicit beats inferred: silently falling back to a
         # different backend than intended would invalidate every number we collect.
@@ -194,6 +202,37 @@ class Gemini(LLM):
         pool_size.labels(provider=_PROVIDER).set(self._max_connections)
         self._inflight = 0
 
+        # Adaptive limiting is opt-in. A fixed limit is easier to reason about when
+        # the backend's capacity really is fixed; this earns its place against shared
+        # quota, where the ceiling moves.
+        if adaptive is None:
+            adaptive = os.getenv("GEMINI_ADAPTIVE", "").lower() in ("1", "true", "yes")
+        self._limiter: AdaptiveLimiter | None = None
+        if adaptive:
+            config = adaptive_config or AdaptiveConfig(
+                initial_limit=float(self._parallelism),
+                min_limit=float(_env_int("GEMINI_ADAPTIVE_MIN", 1)),
+                # Never exceed the connection pool: permits beyond it would queue on
+                # sockets instead of on the gate, which is exactly the invisible
+                # queueing the limiter exists to prevent.
+                max_limit=float(min(self._max_connections, _env_int("GEMINI_ADAPTIVE_MAX", 512))),
+            )
+            self._limiter = AdaptiveLimiter(config)
+            self._publish_limiter()
+
+    def _publish_limiter(self) -> None:
+        if self._limiter is None:
+            return
+        st = self._limiter.state
+        adaptive_limit.labels(provider=_PROVIDER).set(st.limit)
+        adaptive_gradient.labels(provider=_PROVIDER).set(st.gradient)
+        adaptive_baseline_rtt.labels(provider=_PROVIDER).set(st.baseline_rtt_s or 0.0)
+        adaptive_short_rtt.labels(provider=_PROVIDER).set(st.short_rtt_s or 0.0)
+
+    @property
+    def limiter(self) -> AdaptiveLimiter | None:
+        return self._limiter
+
     # -- introspection -------------------------------------------------------
 
     @property
@@ -213,6 +252,9 @@ class Gemini(LLM):
         return self._max_connections
 
     def parallelism(self) -> int:
+        # With adaptive limiting on, this is a live measurement rather than config.
+        if self._limiter is not None:
+            return self._limiter.limit
         return self._parallelism
 
     def describe(self) -> dict[str, Any]:
@@ -348,6 +390,30 @@ class Gemini(LLM):
         tokens_total.labels(**labels, kind="thinking").inc(parsed.thinking_tokens)
         spend_usd_total.labels(**labels).inc(parsed.cost_usd or 0.0)
 
+    def _observe(self, error: LLMError | None, rtt_s: float) -> None:
+        """Classify one attempt for the controller.
+
+        Only backpressure counts as a capacity signal. A safety block or a malformed
+        request says nothing about how much load the vendor can take, and treating
+        those as congestion would throttle us for reasons unrelated to capacity.
+        """
+        if self._limiter is None:
+            return
+        if error is None:
+            outcome = Outcome.SUCCESS
+        elif isinstance(error, (LLMRateLimitError, LLMServerError)):
+            outcome = Outcome.DROP
+            adaptive_drops_total.labels(provider=_PROVIDER).inc()
+        elif type(error).__name__ == "LLMTimeoutError":
+            outcome = Outcome.DROP
+            adaptive_drops_total.labels(provider=_PROVIDER).inc()
+        else:
+            outcome = Outcome.IGNORE
+        self._limiter.observe(
+            outcome=outcome, rtt_s=rtt_s, inflight=self._limiter.state.inflight or self._inflight
+        )
+        self._publish_limiter()
+
     # -- main entrypoint -----------------------------------------------------
 
     async def ask_generic_question(
@@ -380,8 +446,11 @@ class Gemini(LLM):
                 # Count the failed attempt's wall time as vendor time. It was spent
                 # waiting on them, and omitting it would silently reappear as our
                 # overhead in the caller's decomposition.
-                outcome_tracker.upstream_s += time.perf_counter() - started
-                raise self._translate(exc) from exc
+                elapsed = time.perf_counter() - started
+                outcome_tracker.upstream_s += elapsed
+                translated = self._translate(exc)
+                self._observe(translated, elapsed)
+                raise translated from exc
             finally:
                 self._inflight -= 1
                 inflight_requests.labels(provider=_PROVIDER).set(self._inflight)
@@ -391,6 +460,7 @@ class Gemini(LLM):
 
             latency_ms = (time.perf_counter() - started) * 1000.0
             outcome_tracker.upstream_s += latency_ms / 1000.0
+            self._observe(None, latency_ms / 1000.0)
             parsed = self._parse(raw, latency_ms, outcome_tracker.attempts)
 
             if not parsed.answer:

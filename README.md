@@ -37,6 +37,13 @@ Grafana at http://localhost:3000, *Takehome* folder.
 
 ## Three things worth knowing
 
+**Concurrency adapts to available capacity.** `parallelism()` as a constant assumes a
+ceiling you can discover once; Dynamic Shared Quota moves. The controller keys on
+latency rather than error codes, because Vertex absorbs overload by slowing down
+rather than rejecting. Against a backend whose capacity collapses mid-run it produced
+~30x fewer errors than a fixed cap tuned for the good case, which suffered congestion
+collapse. It is off by default. See FINDINGS §6b.
+
 **Our integration adds ~2 ms to a ~400 ms request** and sheds load rather than
 collapsing. k6 drives `service/app.py` over HTTP the way production traffic would,
 and the same script can bypass us to hit the vendor directly; the difference is our

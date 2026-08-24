@@ -224,3 +224,43 @@ service_inflight = Gauge(
     "Inbound requests currently being served.",
     registry=REGISTRY,
 )
+
+
+# --- adaptive concurrency ----------------------------------------------------
+
+adaptive_limit = Gauge(
+    "llm_adaptive_limit",
+    "Current concurrency limit chosen by the controller. A constant here would mean "
+    "the controller is not reacting.",
+    ["provider"],
+    registry=REGISTRY,
+)
+
+adaptive_gradient = Gauge(
+    "llm_adaptive_gradient",
+    "Baseline RTT divided by recent RTT. 1.0 is healthy; below 1.0 means requests are "
+    "queueing and the limit is being reduced before any error appears.",
+    ["provider"],
+    registry=REGISTRY,
+)
+
+adaptive_baseline_rtt = Gauge(
+    "llm_adaptive_baseline_rtt_seconds",
+    "Best recent round-trip time, used as the uncongested reference.",
+    ["provider"],
+    registry=REGISTRY,
+)
+
+adaptive_short_rtt = Gauge(
+    "llm_adaptive_short_rtt_seconds",
+    "Recent round-trip average compared against the baseline.",
+    ["provider"],
+    registry=REGISTRY,
+)
+
+adaptive_drops_total = Counter(
+    "llm_adaptive_drops_total",
+    "Vendor rejections that triggered multiplicative decrease.",
+    ["provider"],
+    registry=REGISTRY,
+)

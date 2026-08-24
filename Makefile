@@ -5,7 +5,7 @@ PY := .venv/bin/python
 K6 := k6
 export PYTHONPATH := .
 
-.PHONY: help venv preflight test calibrate auth-check service-up service-down overhead capacity run runs mock-up mock-down obs-up obs-down obs-logs \
+.PHONY: help venv preflight test calibrate auth-check service-up service-down overhead capacity run runs adaptive-demo mock-up mock-down obs-up obs-down obs-logs \
         k6-smoke k6-ramp k6-constant sweep-mock pool-experiment clean
 
 help:
@@ -97,6 +97,9 @@ capacity: ## Find where our service sheds load
 		TARGET=service SCENARIO=constant RATE=$$R DURATION=20s MAX_VUS=1200 \
 			$(K6) run --quiet loadtest/k6/gemini.js 2>&1 | grep -E "p50=|requests="; \
 	done
+
+adaptive-demo: ## Compare adaptive vs fixed limits across changing capacity
+	$(PY) scripts/adaptive_experiment.py --phase-s 12 --offered 96
 
 run: ## Run k6 + record the run so the dashboard can jump to it (ARGS="--scenario ramp")
 	$(PY) scripts/k6run.py $(ARGS)

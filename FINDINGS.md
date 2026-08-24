@@ -337,6 +337,96 @@ growth rather than as a quietly reduced request rate. Closed-loop harnesses
 systematically understate latency under saturation, which is the most common way a
 load test flatters the system it is measuring.
 
+## 6b. Adaptive concurrency: when it wins, and when it does not *(validated)*
+
+`parallelism()` returning a constant assumes capacity is a property you can discover
+once. Vertex governs Gemini with Dynamic Shared Quota, which has no published
+per-project ceiling and moves with regional demand, so any constant is a guess with a
+shelf life.
+
+`llm/adaptive.py` replaces the guess with a controller. Two design points matter:
+
+**Latency is the primary signal, not errors.** The obvious design is AIMD on 429s.
+It fails here for a measured reason: Vertex frequently absorbs excess load by getting
+*slower* rather than rejecting. The reference solution recorded zero 429s at 500
+concurrent, only latency inflation. A controller watching error codes would see a
+healthy service and keep climbing. So the controller compares a baseline of the
+fastest recent round-trips against a short-term average, and reduces the limit when
+that gradient degrades — before any error appears. Rejections then act as an override
+triggering immediate multiplicative decrease.
+
+**Gradient rather than plain additive increase.** Adding one permit per success needs
+on the order of a thousand successes to climb from 16 to 64, which is why an earlier
+attempt at this could not show a benefit inside a short run. Multiplying toward the
+estimated capacity plus a `sqrt(limit)` allowance reaches a new operating point in
+tens of requests. `test_healthy_traffic_grows_the_limit_quickly` pins that.
+
+### The experiment
+
+Three configurations against a backend whose capacity collapses mid-run and then
+recovers — healthy, degraded, healthy — with the driver offering 96 concurrent slots
+throughout:
+
+| | healthy rps | degraded rps | degraded p50 | total ok | total errors | worst p99 |
+|---|---|---|---|---|---|---|
+| fixed-high (64) | **359.8** | 16.7 | 3,004 ms | **8,730** | **1,531** | 6,569 ms |
+| fixed-low (8) | 50.6 | 37.2 | 2,418 ms | 1,656 | 10 | 3,490 ms |
+| adaptive | 176.5 | 26.0 | **166 ms** | 4,781 | 45 | **2,867 ms** |
+
+**The fixed-high cap suffers congestion collapse.** When capacity dropped it kept
+pushing 64 concurrent into a backend that could take about 8. Throughput fell to
+16.7 rps — *below* the cap tuned for the bad case — and it produced 1,431 errors in a
+single phase. Pushing harder made it slower.
+
+**The fixed-low cap is safe and wasteful.** It sailed through degradation, and gave
+up roughly 7x the available throughput the rest of the time. This is what tuning for
+the worst case costs when the worst case is rare.
+
+**Adaptive tracked capacity**, settling near 46 when healthy and 12 when degraded,
+then climbing back to 45 on recovery. Its degraded p50 of 166 ms against 2,418 and
+3,004 ms is the clearest result in the table: by holding the limit near real capacity
+it kept requests out of a queue entirely, so admitted work stayed fast while the
+excess was shed cleanly.
+
+**On reproducibility.** A second run (committed as
+`results/real/adaptive-experiment.txt`) gave 8,755 / 1,569 errors for fixed-high
+against 4,993 / 59 for adaptive — the same shape. The error-rate gap is the robust
+finding and reproduces at roughly 30x. The worst-case p99 is noisier: adaptive had the
+best tail in the first run (2,867 ms) and the worst in the second (4,207 ms against
+fixed-low's 3,978 ms). I would not claim a tail-latency win on two runs. The claims
+worth standing behind are the error rate, the degraded-phase p50, and the throughput
+recovered relative to a conservative fixed cap.
+
+### Where adaptive loses
+
+It does not win everywhere, and the table shows it. **In the healthy phase it managed
+176 rps against fixed-high's 360.** The controller is deliberately conservative — it
+will not grow on load it has not seen, and it smooths changes — so it leaves real
+throughput unclaimed when conditions are good.
+
+So the trade is roughly half the peak throughput for a ~30x reduction in errors.
+Whether that is right depends on what a failure costs. For
+brand-mention extraction, a failed request has to be retried anyway, so 1,531 errors
+is not 1,531 saved requests — it is requests paid for twice plus operational noise. On
+that reading adaptive is the better default. For a workload where dropped work is
+genuinely free, fixed-high is defensible.
+
+The honest summary: **against constant capacity a well-tuned fixed limit is fine, and
+this is not worth the machinery.** It earns its place when capacity moves, which is
+the situation Dynamic Shared Quota creates by definition.
+
+### Caveat on the shed counts
+
+The adaptive rows show very large shed counts. That is an artifact of the experiment's
+driver, which retries immediately after a 10 ms sleep and therefore spins against a
+closed gate. In the service a shed request is one 503 with `Retry-After`, not a spin
+loop. The shed counts should be read as "the gate was closed a lot during degradation",
+not as a per-request cost.
+
+Adaptive limiting is **off by default** (`GEMINI_ADAPTIVE=true` to enable), because a
+fixed limit is easier to reason about and the case for switching should be made with
+measurements from the real backend rather than assumed.
+
 ## 7. Cost control *(validated)*
 
 Confirmed rates: **$0.30 / 1M input, $2.50 / 1M output**, thinking billed at the
