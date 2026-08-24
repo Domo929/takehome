@@ -167,9 +167,9 @@ async def test_retry_budget_sheds_load_when_exhausted(fake_vertex):
 
 
 async def test_parallelism_is_derived_from_pool_size(fake_vertex):
-    """parallelism() must never exceed the connection pool it has to run through."""
+    """parallelism() must reflect the measured knee and never exceed the pool."""
     provider = build(fake_vertex, max_connections=250)
-    assert provider.parallelism() == 100
+    assert provider.parallelism() == 32
     assert provider.parallelism() < provider.max_connections
 
 

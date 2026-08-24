@@ -37,6 +37,11 @@ Grafana at http://localhost:3000, *Takehome* folder.
 
 ## Three things worth knowing
 
+**Vertex never rate-limited us — it just got slower.** Zero 429s across 630 requests
+up to concurrency 128. Throughput plateaus at ~15 rps around concurrency 32; sixteen
+times the concurrency bought nothing while p99 nearly doubled. `parallelism()` now
+defaults to the measured knee of 32. See FINDINGS §6f.
+
 **Logprobs are free and reveal brands that 100 samples miss.** Token counts are
 identical with them on or off. In a 100-sample run, Roborock appeared **zero times**
 while holding 1.83% of the probability mass at the decision point — counting would

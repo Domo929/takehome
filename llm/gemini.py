@@ -153,8 +153,13 @@ class Gemini(LLM):
         # rather than chosen independently. Headroom above in-flight count absorbs
         # connection churn without letting the pool become the silent constraint.
         self._max_connections = max_connections or _env_int("GEMINI_MAX_CONNECTIONS", 256)
+        # Measured knee on Vertex us-central1: throughput plateaus around 32
+        # concurrent and p99 degrades beyond it without buying any throughput
+        # (FINDINGS 6f). Derived from pool size only when the pool is small enough to
+        # be the tighter constraint, since a limit above the pool queues on sockets
+        # instead of at the gate.
         self._parallelism = parallelism_limit or _env_int(
-            "GEMINI_PARALLELISM", max(1, int(self._max_connections / 2.5))
+            "GEMINI_PARALLELISM", max(1, min(32, int(self._max_connections / 2.5)))
         )
 
         self._retry_policy = retry_policy or RetryPolicy(

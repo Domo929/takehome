@@ -605,6 +605,86 @@ Vertex produces longer answers and shorter thinking traces than the Developer AP
 which narrows the gap. The two Vertex regions agree within 2%, so the remaining
 uncertainty is between tiers, not between regions.
 
+## 6f. Vertex absorbs overload with latency, never with rejection *(measured)*
+
+The most consequential capacity finding, and it validates a design decision made
+earlier on weaker evidence.
+
+Sustained concurrency sweep against `evertune-tests`/us-central1, 130 requests per
+level so each level is actually held rather than merely offered, thinking off,
+`max_output_tokens=512`:
+
+| Concurrency | Usable | Throughput | p50 | p99 | **429s** | Scaling efficiency |
+|---|---|---|---|---|---|---|
+| 8 | 127/130 | 4.8 rps | 1,403 ms | 3,974 ms | **0** | 100% |
+| 32 | 128/130 | **15.4 rps** | 1,495 ms | 3,994 ms | **0** | 80% |
+| 128 | 121/130 | 14.2 rps | 1,506 ms | **7,456 ms** | **0** | **18.5%** |
+
+Three things, in order of importance.
+
+**Zero rate-limit errors at any level.** Not one 429 across 630 requests up to
+concurrency 128. Dynamic Shared Quota on this project is generous enough that I could
+not reach its ceiling at a spend I was willing to incur on someone else's account.
+
+**Throughput plateaus around concurrency 32, then stops improving.** Sixteen times the
+concurrency bought no additional throughput — 15.4 rps at c=32 against 14.2 rps at
+c=128, which is slightly *worse*. Scaling efficiency collapses from 80% to 18.5%.
+
+**The cost of overload is entirely in the tail.** p50 barely moves (1,495 → 1,506 ms)
+while p99 nearly doubles (3,994 → 7,456 ms). Excess concurrency does not fail, it
+queues, and the queue shows up only in the tail.
+
+### Why this matters for the limiter
+
+§6b argued that an adaptive limiter should key on **latency** rather than error codes,
+on the grounds that Vertex absorbs overload by slowing down rather than rejecting. At
+the time that rested on the reference solution's report and on a simulated backend.
+
+It is now measured directly on this project: **there are no errors to key on.** A
+controller watching 429s would have seen a perfectly healthy service at concurrency
+128 and kept climbing, while p99 doubled and throughput fell. The latency gradient is
+not a refinement here; it is the only available signal.
+
+That said, it also weakens the case for the limiter existing at all — see the caveat
+below.
+
+### `parallelism()` should be about 32
+
+Measured, not guessed. Concurrency 32 is the knee: full throughput, p99 indistinguishable
+from c=8, and 4x headroom before the tail degrades. The current default derives from
+pool size and lands at 102, which is past the knee — it would buy nothing and cost tail
+latency. This is exactly the kind of number a hardcoded constant gets wrong, because it
+is a property of the deployment rather than of the code.
+
+### An honest limitation
+
+I did not find the 429 threshold, which means **Dynamic Shared Quota volatility remains
+unverified.** §6b's adaptive limiter is justified by capacity moving over time; what I
+have shown is that capacity is generous and that latency degrades before rejection. If
+DSQ turns out to be stable for a single tenant, the honest recommendation is a fixed
+limit at ~32 and deleting the adaptive machinery. Settling that needs a sustained run
+across hours or days, which is a larger spend than I would make unasked.
+
+### A confounder I created and then removed
+
+The first attempt at this sweep used `max_output_tokens=256` and reported a ~20%
+"error" rate that was not errors at all — it was `MAX_TOKENS` truncation being counted
+as unusable, which is correct behaviour by `is_usable` but useless as a capacity
+signal. Raising the cap to 512 dropped truncation from **20.0% to 3.6%**:
+
+| `max_output_tokens` | Truncated | Rate |
+|---|---|---|
+| 256 | 48 / 240 | **20.0%** |
+| 512 | 14 / 390 | **3.6%** |
+
+That is a finding in its own right: **a 256-token cap silently truncates one in five
+brand-recommendation answers**, and every one of them is a billed HTTP 200 that
+`finish_reason` is the only way to detect.
+
+The first sweep also had a design error worth naming: 40 requests cannot sustain
+concurrency 128, so the high-concurrency rows measured a burst rather than a held
+level. The rerun sizes requests to the level being tested.
+
 ## 6d. Where the service actually saturates *(validated)*
 
 Even though throughput is not the binding constraint, it is worth knowing where the
@@ -833,12 +913,15 @@ since a question that does not change a decision is not worth anyone's time.
 
 Ordered by how load-bearing the current claims are:
 
-1. **Real throughput ceiling and where 429s begin.** Everything about Vertex capacity
-   is currently unmeasured. The harness runs unchanged.
-2. **Whether Dynamic Shared Quota actually moves.** The adaptive limiter (§6b) is
-   justified by capacity varying; the experiment simulated that by reconfiguring a
-   fake backend. If DSQ turns out stable for a single tenant, the honest
-   recommendation is to leave adaptive limiting off and use a tuned constant.
+1. ~~Real throughput ceiling~~ — **done, §6f.** Knee at concurrency 32, ~15 rps, and
+   zero 429s up to c=128. Where 429s begin is still unknown; I could not reach the
+   ceiling at a spend I was willing to make on someone else's account.
+2. **Whether Dynamic Shared Quota actually moves over time.** Partially addressed:
+   §6f shows capacity is generous and that latency degrades before rejection, which
+   validates keying the limiter on latency. It does not show capacity *varying*, which
+   is the actual justification for adaptive limiting. A sustained run across hours
+   would settle it; if DSQ is stable for a single tenant, the honest call is a fixed
+   limit at 32 and deleting the adaptive machinery.
 3. **Batch pricing against a real invoice.** §6c uses Google's published rates. The
    relative ordering is robust; the absolute figures are not verified.
 4. **Context cache hit rate in practice.** Implicit caching is on by default and the
