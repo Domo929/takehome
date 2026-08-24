@@ -860,16 +860,40 @@ Ordered by how load-bearing the current claims are:
     rps. More workers is the standard fix, but each gets its own connection pool, so
     the concurrency limit becomes per-worker rather than global. Untested.
 
-### Known gaps in what is built
+### Operational readiness
 
-Stated plainly rather than left for a reviewer to find:
+**Graceful shutdown.** SIGTERM and SIGINT flip the service into draining: new requests
+receive 503 with `Retry-After` while in-flight work finishes, bounded by
+`SERVICE_DRAIN_TIMEOUT_S`. For a batch worker this matters more than usual — dropping
+a request mid-flight means paying for tokens whose answer is discarded. Verified with
+six slow requests in flight; all six completed and new requests were refused.
 
-- **No graceful shutdown.** SIGTERM drops in-flight requests. Fine for a load
-  harness, not for a batch worker that should drain first.
-- **No request IDs or tracing.** A slow request cannot currently be followed from the
-  service through to a specific vendor call.
-- **No Dockerfile for the service.** It runs under uvicorn locally; packaging is not
-  addressed.
-- **Batch API is not implemented**, only modelled. Given §6c it is the highest-value
-  thing to build next, and it is a different API surface rather than a config flag.
+**Logging is deliberately sparse.** A daily sweep issues 100,000 requests; one line
+each is 100,000 lines nobody reads. So metrics carry the aggregate and logs carry the
+exceptional:
+
+- successes are never logged individually — Prometheus already answers "how many" and
+  "how fast"
+- every failure is logged once with full diagnostic metadata: error class, status
+  code, attempt number, backoff, retry history, vendor detail
+- retries log at WARNING rather than ERROR, because a retried request has not failed
+  yet, but a rising retry rate precedes real failure
+- **unusable 200s are logged**, tagged `billed_but_unusable` — they are the quietest
+  failure mode in the system and nothing else in the stack treats them as errors
+
+Output is single-line JSON for querying; `LOG_FORMAT=text` for local work. Pinned by
+tests, including one asserting five successful requests produce zero log lines.
+
+**Container.** Non-root, healthchecked, exec-form CMD so uvicorn is PID 1 and receives
+SIGTERM directly — a shell wrapper would swallow it and the drain would never run.
+Credentials are mounted, never baked in.
+
+**Deliberately not built: request IDs and tracing.** This workload measures aggregate
+brand-mention distributions across 100 samples per prompt. Individual request identity
+is not a unit anyone reasons about, so per-request correlation IDs would add plumbing
+for a question nobody is asking. If a future workload needed per-call attribution, the
+hook is the metrics module.
+
+**Batch API is modelled, not implemented.** Given §6c it is the highest-value thing to
+build next, and it is a different API surface rather than a config flag.
 

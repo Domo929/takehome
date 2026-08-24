@@ -37,9 +37,13 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 
+from .logging_setup import log_failure
+
 # The SDK logs an automatic-function-calling advisory on every generate_content call.
 # We pass no tools, so it is pure noise that would drown a load-test log.
 logging.getLogger("google_genai.models").setLevel(logging.ERROR)
+
+logger = logging.getLogger("llm.gemini")
 
 from .adaptive import AdaptiveConfig, AdaptiveLimiter, Outcome
 from .errors import (
@@ -443,6 +447,22 @@ class Gemini(LLM):
 
         def _on_retry(err: LLMError, delay: float, attempt: int) -> None:
             retry_attempts_total.labels(provider=_PROVIDER, reason=err.error_class).inc()
+            # Logged at WARNING, not ERROR: a retried request has not failed yet. It
+            # is worth seeing because a rising retry rate precedes real failure.
+            logger.warning(
+                "retrying after %s",
+                err.error_class,
+                extra={
+                    "provider": _PROVIDER,
+                    "model": self._model,
+                    "location": self._location,
+                    "attempt": attempt,
+                    "backoff_s": round(delay, 3),
+                    "status_code": getattr(err, "status_code", None),
+                    "retry_after_s": getattr(err, "retry_after_s", None),
+                    "detail": str(err)[:200],
+                },
+            )
 
         async def _attempt() -> GeminiResponse:
             self._inflight += 1
@@ -486,6 +506,23 @@ class Gemini(LLM):
                 # spend is recorded before deciding whether to retry.
                 self._record(parsed, outcome="empty")
 
+                # HTTP 200 with no usable text. Logged because nothing else in the
+                # stack treats this as an error, which is exactly why it is easy to
+                # ship a system that silently drops a slice of its answers.
+                logger.warning(
+                    "unusable response",
+                    extra={
+                        "provider": _PROVIDER,
+                        "model": self._model,
+                        "location": self._location,
+                        "finish_reason": parsed.finish_reason.value,
+                        "input_tokens": parsed.input_tokens,
+                        "output_tokens": parsed.output_tokens,
+                        "thinking_tokens": parsed.thinking_tokens,
+                        "cost_usd": parsed.cost_usd,
+                        "billed_but_unusable": True,
+                    },
+                )
                 if parsed.finish_reason in _BLOCKED_REASONS:
                     raise LLMContentBlockedError(
                         f"blocked: {parsed.finish_reason.value}",
@@ -513,6 +550,17 @@ class Gemini(LLM):
                 finish_reason="",
                 error_class=err.error_class,
             ).inc()
+            log_failure(
+                logger,
+                "request failed after retries",
+                error=err,
+                model=self._model,
+                location=self._location,
+                backend=self._backend,
+                attempts=outcome_tracker.attempts,
+                retries_by_reason=outcome_tracker.retries_by_reason or None,
+                budget_exhausted=outcome_tracker.budget_exhausted or None,
+            )
             raise
         finally:
             if self._retry_policy.budget is not None:

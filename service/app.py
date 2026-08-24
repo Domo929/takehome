@@ -34,7 +34,9 @@ signal.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import signal
 import time
 from contextlib import asynccontextmanager
 from typing import Any
@@ -52,6 +54,8 @@ from llm.errors import (
     LLMRateLimitError,
 )
 from llm.gemini import Gemini
+from llm.logging_setup import configure as configure_logging
+from llm.logging_setup import log_failure
 from llm.metrics import (
     REGISTRY,
     EventLoopLagMonitor,
@@ -99,9 +103,14 @@ class ServiceState:
         # someone notices. Unset means no ceiling.
         self.budget_usd = float(os.getenv("SERVICE_BUDGET_USD", "0") or 0)
         self.spent_usd = 0.0
+        # Set on SIGTERM/SIGINT. New work is refused while in-flight work finishes;
+        # for a batch worker, dropping requests mid-flight means paying for tokens
+        # whose answers are thrown away.
+        self.draining = False
 
 
 state = ServiceState()
+logger = logging.getLogger("service")
 
 
 @asynccontextmanager
@@ -123,6 +132,7 @@ async def _admission(limiter, gate):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_logging()
     # One provider per process, so every request shares one connection pool.
     # Constructing per request would defeat pooling and hide the pool ceiling, which
     # is precisely the bug this exercise exists to catch.
@@ -134,7 +144,43 @@ async def lifespan(app: FastAPI):
     if state.budget_usd > 0:
         budget_remaining_usd.set(state.budget_usd)
     state.lag.start()
+
+    loop = asyncio.get_running_loop()
+
+    def _drain(sig: int) -> None:
+        # Flip the flag and let in-flight requests finish. uvicorn's own handler then
+        # stops the server once connections close.
+        state.draining = True
+        logger.warning(
+            "draining on signal",
+            extra={"signal": signal.Signals(sig).name, "inflight": state.inflight},
+        )
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _drain, sig)
+        except (NotImplementedError, RuntimeError):
+            # Not available on every platform, and uvicorn may already own it.
+            pass
+
+    logger.info(
+        "service ready",
+        extra={
+            "capacity": state.capacity,
+            "adaptive": state.provider.limiter is not None,
+            **state.provider.describe(),
+        },
+    )
+
     yield
+
+    deadline = time.monotonic() + float(os.getenv("SERVICE_DRAIN_TIMEOUT_S", "30"))
+    while state.inflight > 0 and time.monotonic() < deadline:
+        await asyncio.sleep(0.1)
+    if state.inflight:
+        logger.warning("drain timed out", extra={"abandoned": state.inflight})
+    else:
+        logger.info("drained cleanly", extra={"spent_usd": round(state.spent_usd, 6)})
     await state.lag.stop()
 
 
@@ -146,7 +192,8 @@ async def health() -> dict[str, Any]:
     provider = state.provider
     limiter = provider.limiter if provider else None
     return {
-        "ok": provider is not None,
+        "ok": provider is not None and not state.draining,
+        "draining": state.draining,
         "capacity": limiter.limit if limiter else state.capacity,
         "adaptive": limiter.snapshot() if limiter else None,
         "inflight": state.inflight,
@@ -166,6 +213,11 @@ async def ask(payload: AskRequest) -> JSONResponse:
         return JSONResponse({"error": "service not ready"}, status_code=503)
     limiter = provider.limiter
     gate = state.gate
+
+    if state.draining:
+        return JSONResponse(
+            {"error": "shutting down"}, status_code=503, headers={"Retry-After": "5"}
+        )
 
     started = time.perf_counter()
 
@@ -237,6 +289,14 @@ async def ask(payload: AskRequest) -> JSONResponse:
             service_requests_total.labels(
                 outcome="error", finish_reason=exc.error_class
             ).inc()
+            log_failure(
+                logger,
+                "upstream failure returned to caller",
+                error=exc,
+                elapsed_ms=round((time.perf_counter() - started) * 1000, 1),
+                question_chars=len(payload.question),
+                inflight=state.inflight,
+            )
             return JSONResponse(
                 {"error": exc.error_class, "detail": str(exc)}, status_code=502
             )

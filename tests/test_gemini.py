@@ -371,3 +371,81 @@ def test_cached_input_tokens_are_discounted_not_double_charged():
         "gemini-2.5-flash", input_tokens=100, output_tokens=0, cached_tokens=99999
     )
     assert absurd > 0
+
+
+async def test_failures_are_logged_with_diagnostic_metadata(fake_vertex, caplog):
+    """A failure must carry enough context to diagnose without a repro.
+
+    Successful requests are deliberately not logged — at 100k requests/day that is
+    noise, and Prometheus already answers "how many" and "how fast". Failures are
+    rare enough that a fat record is cheap.
+    """
+    import logging
+
+    fake_vertex.configure(rate_limit_probability=1.0, retry_after_s=0.01)
+    provider = build(
+        fake_vertex,
+        retry_policy=RetryPolicy(
+            max_attempts=2, base_delay_s=0.01, attempt_timeout_s=5, total_deadline_s=10
+        ),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="llm.gemini"):
+        with pytest.raises(LLMRateLimitError):
+            await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+    terminal = [r for r in caplog.records if "failed after retries" in r.getMessage()]
+    assert terminal, "terminal failure was not logged"
+    record = terminal[0]
+    assert record.error_class == "LLMRateLimitError"
+    assert record.status_code == 429
+    assert record.attempts >= 1
+    assert record.model and record.location
+
+    retries = [r for r in caplog.records if "retrying after" in r.getMessage()]
+    assert retries, "retry was not logged"
+    # A retried request has not failed yet, so it must not be logged as an error.
+    assert retries[0].levelno == logging.WARNING
+
+    fake_vertex.configure(rate_limit_probability=0.0)
+
+
+async def test_successful_requests_are_not_logged(fake_vertex, caplog):
+    """Log volume must not scale with successful traffic."""
+    import logging
+
+    fake_vertex.configure(
+        rate_limit_probability=0.0, empty_probability=0.0, safety_probability=0.0,
+        server_error_probability=0.0, truncate_probability=0.0,
+    )
+    provider = build(fake_vertex)
+
+    with caplog.at_level(logging.INFO, logger="llm.gemini"):
+        for _ in range(5):
+            result = await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+            assert result.is_usable
+
+    assert not caplog.records, f"5 successes produced {len(caplog.records)} log lines"
+
+
+async def test_unusable_response_is_logged_as_billed_waste(fake_vertex, caplog):
+    """HTTP 200 with no text is the quietest failure mode, so it gets logged."""
+    import logging
+
+    fake_vertex.configure(safety_probability=1.0, empty_probability=0.0)
+    provider = build(
+        fake_vertex,
+        retry_policy=RetryPolicy(max_attempts=1, attempt_timeout_s=5, total_deadline_s=10),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="llm.gemini"):
+        with pytest.raises(LLMContentBlockedError):
+            await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+    unusable = [r for r in caplog.records if "unusable response" in r.getMessage()]
+    assert unusable, "unusable response was not logged"
+    assert unusable[0].finish_reason == "SAFETY"
+    # The point of the record: tokens were billed for an answer we cannot use.
+    assert unusable[0].billed_but_unusable is True
+
+    fake_vertex.configure(safety_probability=0.0)
