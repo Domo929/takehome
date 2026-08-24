@@ -2,7 +2,16 @@ import os
 from together import AsyncTogether
 from together.types.chat.completion_create_params import MessageChatCompletionUserMessageParam, MessageChatCompletionSystemMessageParam
 
-from llm import LLM
+from .llm import LLM, FinishReason
+
+_PROVIDER = "together"
+
+_FINISH_REASONS = {
+    "stop": FinishReason.STOP,
+    "eos": FinishReason.STOP,
+    "length": FinishReason.MAX_TOKENS,
+    "tool_calls": FinishReason.OTHER,
+}
 
 class Together(LLM):
     def __init__(self):
@@ -23,8 +32,17 @@ class Together(LLM):
             temperature=temperature,
         )
 
+        choice = response.choices[0]
+        raw_finish = getattr(choice, "finish_reason", None)
+        finish_reason = _FINISH_REASONS.get(
+            str(getattr(raw_finish, "value", raw_finish)).lower(), FinishReason.UNKNOWN
+        )
+
         return LLM.SimpleResponse(
-            answer=response.choices[0].message.content,
+            answer=choice.message.content,
             input_tokens=response.usage.prompt_tokens,
             output_tokens=response.usage.completion_tokens,
+            finish_reason=finish_reason,
+            model=self.__model,
+            provider=_PROVIDER,
         )
