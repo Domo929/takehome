@@ -55,7 +55,7 @@ from collections import Counter
 
 from harness.workload import build_corpus
 from llm.gemini import Gemini
-from llm.response import FinishReason
+from llm.llm import FinishReason
 from llm.pricing import GROUNDING_USD_PER_1K_PROMPTS
 
 REPO = pathlib.Path(__file__).resolve().parent.parent

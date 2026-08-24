@@ -199,10 +199,9 @@ async def _one_request(
 
     latency_ms = (time.perf_counter() - started) * 1000.0
 
-    # Extended fields live on GeminiResponse, not on the base LLM.SimpleResponse
-    # contract. Reading them defensively keeps the harness usable against any
-    # provider — including the stock Together one — instead of silently requiring
-    # the Gemini subclass.
+    # These now live on the contract itself, but they are read defensively anyway:
+    # a provider built against the pre-grounding contract still satisfies the type,
+    # and the harness should degrade rather than crash on one.
     thinking_tokens = getattr(result, "thinking_tokens", 0)
     cost = getattr(result, "cost_usd", None)
     if cost is None:

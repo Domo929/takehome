@@ -12,7 +12,13 @@ class Together(LLM):
     def parallelism(self):
         return 100
 
-    async def ask_generic_question(self, system_prompt: str, question: str, temperature: float) -> LLM.SimpleResponse:
+    async def ask_generic_question(self, system_prompt: str, question: str, temperature: float, *, grounded: bool = False) -> LLM.SimpleResponse:
+        if grounded:
+            # Refusing is the point. Returning an ungrounded answer here would satisfy
+            # the type signature and silently corrupt any comparison that assumed the
+            # request was honoured.
+            raise NotImplementedError("Together does not support grounded generation")
+
         response = await self.__client.chat.completions.create(
             model=self.__model,
             messages=[

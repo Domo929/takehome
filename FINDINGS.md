@@ -305,20 +305,23 @@ model-specific, and it is worth about 4x on the bill.
 
 ---
 
-## 2. Working within the provided contract
+## 2. The contract: held immutable, then changed deliberately
 
-I treated `llm/llm.py` as an immutable contract. It is unchanged, byte for byte.
+**I extended `llm/llm.py`.** That deserves the most scrutiny of anything here, so
+here is the full reasoning including the position I abandoned.
 
-That was a deliberate call, and initially the wrong one — my first pass widened
-`SimpleResponse` to add `finish_reason`, make `answer` nullable, and carry timing.
-Every one of those changes was avoidable:
+### What I did first, and why it was right at the time
+
+I treated `llm/llm.py` as immutable and kept it byte-identical for most of this work.
+My first pass had widened `SimpleResponse`, and I reverted it, because most of what I
+thought needed a contract change did not:
 
 **Thinking-token accounting needs no contract change.** Gemini reports
 `thoughtsTokenCount` separately from `candidatesTokenCount` but bills both at the
-output rate. Computing `output_tokens` as visible + thinking keeps the *inherited*
-field meaning "total billed output", which is what a caller reading only the base
-contract already assumes. Reporting `candidatesTokenCount` alone is an undercount
-that surfaces on the invoice rather than in the code.
+output rate. Computing `output_tokens` as visible + thinking keeps the inherited field
+meaning "total billed output", which is what a base-contract caller already assumes.
+Reporting `candidatesTokenCount` alone is an undercount that surfaces on the invoice
+rather than in the code. *(The reference solution on PR #1 has this bug.)*
 
 **`answer` does not need to be nullable.** Gemini returns HTTP 200 with no text on
 `MAX_TOKENS` and on safety blocks. Rather than widen the type and push a `None` into
@@ -326,40 +329,75 @@ callers that believe they hold a string, the provider raises `LLMEmptyResponseEr
 or `LLMContentBlockedError`. A returned response always carries text, so `answer: str`
 stays true.
 
-**Only `finish_reason` genuinely had nowhere to go.** Without it, a truncated fragment
-is indistinguishable from a complete answer — and for brand-mention counting a
-fragment is worse than an error, because it looks like success and quietly skews the
-counts.
+Everything else went into a `GeminiResponse` subclass. That was the right shape for a
+vendor integration, and I would have shipped it.
 
-So `GeminiResponse` (in `llm/response.py`) extends `LLM.SimpleResponse` additively:
-every new field has a default, no inherited field changes type or meaning, and
-`isinstance(response, LLM.SimpleResponse)` holds. Base-contract callers work
-untouched; callers that know they are talking to Gemini get the metadata. This is
-pinned by `test_base_contract_is_unmodified_and_honored`, which asserts the base
-dataclass still has exactly its three original fields — so a future edit to
-`llm/llm.py` fails the suite rather than passing silently.
+### What changed my mind
 
-`parallelism()` keeps its signature. It now returns **64**, which is the only
-concurrency validated under sustained load (§6f) rather than a value inferred from
-pool arithmetic, and it stays capped by the connection pool because a limit above the
-pool queues on sockets instead of at the admission gate.
+Grounding. Evertune's measurement runs each prompt with live search off, then on, and
+the delta is the product (§0c). Two facts follow:
 
-**What I would propose if I owned the interface:** promote `finish_reason` onto
-`SimpleResponse`. Truncation is not Gemini-specific — Together exposes the same
-concept as `choices[0].finish_reason`, and the existing provider silently discards
-it. That is a change for the contract's owner to make deliberately, not one to take
-unilaterally inside a vendor integration.
+1. **The contract had no way to express it.** Not the request, and — worse — not the
+   response. There was nowhere to report *whether search actually ran*.
+2. **It cannot live on the Gemini subclass.** Evertune compares brand visibility
+   across models. A grounded path that only exists on one provider's concrete type
+   cannot be swapped, which defeats the purpose.
 
-**Every file the exercise shipped is still at its original path.** Nothing was
-renamed, moved, or restructured: `llm/llm.py` is byte-identical, `llm/together.py`
-differs by one import line, and the original brief is preserved verbatim in
-`README.md`. Additions live in new files and new directories. A reviewer can diff this
-branch against the starting commit and see only additions plus one bug fix, which
-keeps the review cheap and makes the integration easy to reason about.
+A subclass-only design would also have forced grounding to be chosen at construction
+time, meaning one provider instance per condition. Since both conditions run on every
+prompt, that permanently halves the effective connection pool and doubles TLS
+handshakes — and §6h found TLS is where our throughput actually goes.
 
-The one edit to `llm/together.py` is a one-line bug fix, not a contract change: it did
-`from llm import LLM` inside `llm/together.py`, a circular import that resolves only
-by accident of import order. It is now `from .llm import LLM`.
+### The change, and the constraints I held
+
+```python
+grounded: bool = False                                   # what happened
+grounding_sources: list[str] = field(default_factory=list)
+def supports_grounding(self) -> bool: return False
+async def ask_generic_question(..., *, grounded: bool = False)
+```
+
+- **Additive only.** The original three fields keep their names, order and types.
+  Every added field has a default, so `SimpleResponse("hi", 1, 2)` still works.
+- **Keyword-only, defaulting False.** Existing positional callers are untouched, and
+  a feature costing ~88x per request is never a silent default.
+- **The response reports what happened, not what was requested.** This is the
+  important one. Asking for grounding does not guarantee it: the model can decline,
+  retrieval can fail, and the request still returns 200 with a plausible answer. A
+  contract that lets you ask without letting you check has the corruption built in.
+  `grounding_requested` is carried separately and `grounding_degraded` compares them.
+- **`supports_grounding()` defaults to False**, and `Together.ask_generic_question`
+  *raises* on `grounded=True` rather than returning an ungrounded answer. Silent
+  degradation there would be the same bug one level up.
+
+`test_base_contract_stays_backward_compatible` pins all of this: field order, defaults
+on every addition, keyword-only-ness, and that positional construction still works.
+
+Once the contract carried grounding, keeping a separate `GeminiResponse` for
+`finish_reason`, `thinking_tokens`, `cost_usd` and timing stopped making sense — none
+of those are Gemini-specific either. Together exposes `finish_reason` as
+`choices[0].finish_reason` and the stock provider discards it. So they moved onto
+`SimpleResponse` too and `llm/response.py` is gone. One response type, one place to
+look.
+
+One deliberate detail: `cost_usd` is `float | None`, not `float`. A provider that
+cannot price itself must report "unknown" rather than `0.0`, or it silently
+under-reports into a spend ledger — the same failure mode as silent grounding
+degradation.
+
+### What I did *not* do
+
+`parallelism()` keeps its signature. Every file the exercise shipped is still at its
+original path — nothing renamed, moved or restructured. `llm/together.py` differs by
+one import fix (`from llm import LLM` was a circular import that resolved only by
+accident of import order) plus the grounding guard.
+
+**The honest summary:** I held the contract immutable until a product requirement made
+that untenable, then changed it in the narrowest backwards-compatible way I could and
+wrote down why. If Evertune's answer is "the contract is fixed, work around it", the
+fallback is Option B — grounding on the Gemini type only — at the cost of the grounded
+path not being polymorphic. That is a reasonable call to make differently, and it is
+one line of configuration away.
 
 ---
 

@@ -9,15 +9,13 @@ from .errors import (
     LLMTimeoutError,
 )
 from .gemini import Gemini
-from .llm import LLM
-from .response import FinishReason, GeminiResponse
+from .llm import LLM, FinishReason
 from .together import Together
 
 __all__ = [
     'LLM',
     'Together',
     'Gemini',
-    'GeminiResponse',
     'FinishReason',
     'LLMError',
     'LLMRateLimitError',

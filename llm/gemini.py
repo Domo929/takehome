@@ -56,7 +56,7 @@ from .errors import (
     LLMServerError,
 )
 from .llm import LLM
-from .response import FinishReason, GeminiResponse
+from .llm import LLM, FinishReason
 from .metrics import (
     adaptive_baseline_rtt,
     adaptive_drops_total,
@@ -363,7 +363,9 @@ class Gemini(LLM):
 
     # -- response parsing ----------------------------------------------------
 
-    def _parse(self, response: Any, latency_ms: float, attempts: int) -> GeminiResponse:
+    def _parse(
+        self, response: Any, latency_ms: float, attempts: int, requested_grounding: bool
+    ) -> LLM.SimpleResponse:
         usage = getattr(response, "usage_metadata", None)
         input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
         visible = int(getattr(usage, "candidates_token_count", 0) or 0)
@@ -431,7 +433,7 @@ class Gemini(LLM):
             self._model, input_tokens, output_tokens, cached, grounded=actually_grounded
         )
 
-        if self._grounded and not actually_grounded:
+        if requested_grounding and not actually_grounded:
             # Loud on purpose. This is the failure that corrupts the measurement
             # rather than breaking the request, so it must never be inferred from
             # absence of an error.
@@ -446,13 +448,13 @@ class Gemini(LLM):
                 },
             )
 
-        return GeminiResponse(
+        return LLM.SimpleResponse(
             answer=answer,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             thinking_tokens=thinking,
             grounded=actually_grounded,
-            grounding_requested=self._grounded,
+            grounding_requested=requested_grounding,
             search_queries=search_queries,
             grounding_sources=sources,
             finish_reason=finish_reason,
@@ -464,7 +466,7 @@ class Gemini(LLM):
             metadata=metadata,
         )
 
-    def _record(self, parsed: GeminiResponse, outcome: str) -> None:
+    def _record(self, parsed: LLM.SimpleResponse, outcome: str) -> None:
         labels = {"provider": _PROVIDER, "model": self._model}
         request_duration.labels(
             **labels, outcome=outcome, finish_reason=parsed.finish_reason.value
@@ -509,9 +511,32 @@ class Gemini(LLM):
 
     # -- main entrypoint -----------------------------------------------------
 
+    def supports_grounding(self) -> bool:
+        return True
+
     async def ask_generic_question(
-        self, system_prompt: str, question: str, temperature: float
-    ) -> GeminiResponse:
+        self,
+        system_prompt: str,
+        question: str,
+        temperature: float,
+        *,
+        grounded: bool | None = None,
+    ) -> LLM.SimpleResponse:
+        """Ask one question, optionally with live web search.
+
+        ``grounded`` is per call rather than per instance because the two conditions
+        are measured on the same prompts. One provider means one connection pool, one
+        retry budget and one cost ledger across both; two instances would halve the
+        effective pool and double the TLS handshakes, which -- see FINDINGS 6h -- is
+        where our throughput actually goes.
+
+        ``None`` means "use the instance default", which is how the environment
+        configures it. Passing an explicit bool always wins.
+        """
+        use_grounding = self._grounded if grounded is None else grounded
+        if use_grounding and not self.supports_grounding():
+            raise NotImplementedError("grounding is not available on this backend")
+
         config = types.GenerateContentConfig(
             system_instruction=system_prompt,
             temperature=temperature,
@@ -519,7 +544,7 @@ class Gemini(LLM):
             thinking_config=types.ThinkingConfig(thinking_budget=self._thinking_budget),
             tools=(
                 [types.Tool(google_search=types.GoogleSearch())]
-                if self._grounded
+                if use_grounding
                 else None
             ),
         )
@@ -545,7 +570,7 @@ class Gemini(LLM):
                 },
             )
 
-        async def _attempt() -> GeminiResponse:
+        async def _attempt() -> LLM.SimpleResponse:
             self._inflight += 1
             inflight_requests.labels(provider=_PROVIDER).set(self._inflight)
             pool_saturation_ratio.labels(provider=_PROVIDER).set(
@@ -563,7 +588,7 @@ class Gemini(LLM):
                 elapsed = time.perf_counter() - started
                 outcome_tracker.upstream_s += elapsed
                 translated = self._translate(exc)
-                if self._grounded:
+                if use_grounding:
                     # A grounded attempt that reached the vendor may have run its
                     # search before failing, and search bills per prompt regardless of
                     # whether generation completed. We cannot tell from here, so we
@@ -586,7 +611,9 @@ class Gemini(LLM):
             latency_ms = (time.perf_counter() - started) * 1000.0
             outcome_tracker.upstream_s += latency_ms / 1000.0
             self._observe(None, latency_ms / 1000.0)
-            parsed = self._parse(raw, latency_ms, outcome_tracker.attempts)
+            parsed = self._parse(
+                raw, latency_ms, outcome_tracker.attempts, use_grounding
+            )
 
             if not parsed.answer:
                 empty_responses_total.labels(

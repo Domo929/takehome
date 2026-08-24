@@ -9,15 +9,15 @@ Adds Gemini 2.5 Flash as a provider, plus the evidence that it holds up under lo
 ## What is here
 
 ```
-llm/            provider layer: gemini.py, response.py, errors.py, retry.py,
-                metrics.py, pricing.py  (llm.py is UNCHANGED from upstream)
+llm/            provider layer: gemini.py, errors.py, retry.py, metrics.py,
+                pricing.py  (llm.py extended for grounding - see FINDINGS 2)
 service/        the integration deployed as an HTTP service - the system under test
 harness/        in-process batch driver + cost governor + preflight
 loadtest/k6/    external load generator (drives the service, or the vendor direct)
 mock/           fake Vertex endpoint for $0 iteration
 observability/  Prometheus + Grafana, provisioned dashboards
-tests/          12 tests, no network, no spend
-results/real/   live measurements (n=15 per thinking config)
+tests/          39 tests, no network, no spend
+results/real/   live measurements, raw JSONL + manifests
 ```
 
 ## Try it without credentials
@@ -83,10 +83,14 @@ and the same script can bypass us to hit the vendor directly; the difference is 
 cost. At 4x the sustainable rate our overhead stayed flat at 0.19 ms p99 while the
 service returned 503s instead of queueing. See FINDINGS §6.
 
-**The provided abstraction is untouched.** `llm/llm.py` is byte-identical to
-upstream. `GeminiResponse` extends `LLM.SimpleResponse` additively for the metadata
-Gemini needs, so base-contract callers keep working — enforced by a test that fails if
-the base dataclass ever changes. See FINDINGS §2.
+**The provided abstraction was held immutable, then changed deliberately.** I kept
+`llm/llm.py` byte-identical until grounding made that untenable: the contract had no
+way to say whether live search actually ran, and grounding has to be polymorphic
+because Evertune compares across models. The change is strictly additive — original
+fields keep their names, order and types; every addition defaults; the new parameter
+is keyword-only — and a test pins all of it. Every provided file is still at its
+original path. See FINDINGS §2 for the full reasoning, including the fallback if the
+contract is considered fixed.
 
 **The connection pool is the throughput ceiling and it is invisible.** At pool=8
 against a service answering in 500 ms, the client reports 4.2 s and caps at 15.4 rps.

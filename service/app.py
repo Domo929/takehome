@@ -75,6 +75,9 @@ class AskRequest(BaseModel):
     question: str = Field(..., max_length=8000)
     system_prompt: str = "You are a market research assistant. Answer concisely."
     temperature: float = 0.7
+    # Per request, because the two measurement conditions run over the same prompts
+    # and should share one connection pool. None means "use the service default".
+    grounded: bool | None = None
 
 
 class AskResponse(BaseModel):
@@ -86,6 +89,9 @@ class AskResponse(BaseModel):
     cost_usd: float
     upstream_ms: float
     retry_backoff_ms: float
+    # What actually happened, which is not necessarily what was asked for.
+    grounded: bool = False
+    grounding_sources: list[str] = []
     overhead_ms: float
     queue_wait_ms: float
     attempts: int
@@ -254,7 +260,10 @@ async def ask(payload: AskRequest) -> JSONResponse:
         service_inflight.set(state.inflight)
         try:
             result = await provider.ask_generic_question(
-                payload.system_prompt, payload.question, payload.temperature
+                payload.system_prompt,
+                payload.question,
+                payload.temperature,
+                grounded=payload.grounded,
             )
         except (LLMEmptyResponseError, LLMContentBlockedError) as exc:
             service_request_duration_seconds.labels(outcome="unusable").observe(
@@ -343,6 +352,8 @@ async def ask(payload: AskRequest) -> JSONResponse:
             overhead_ms=round(overhead * 1000, 2),
             queue_wait_ms=round(queue_wait * 1000, 2),
             attempts=result.attempts,
+            grounded=result.grounded,
+            grounding_sources=result.grounding_sources,
         ).model_dump()
     )
 
