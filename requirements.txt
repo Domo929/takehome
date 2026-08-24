@@ -1,18 +1,17 @@
-# Existing provider
+pytest-asyncio==1.3.0
 together==2.12.0
 
-# Gemini on Vertex AI
+# --- added for the Gemini on Vertex AI integration ---
 google-genai>=2.19.0
 google-auth>=2.56.0
 httpx>=0.28.0
 
-# Instrumentation
+# instrumentation
 prometheus-client>=0.26.0
 
-# Fake Vertex endpoint used for $0 harness validation
+# fake Vertex endpoint used for $0 harness validation
 fastapi>=0.141.0
 uvicorn>=0.52.0
 
-# Tests
+# tests
 pytest>=9.0.0
-pytest-asyncio==1.3.0

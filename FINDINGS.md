@@ -73,6 +73,13 @@ concept as `choices[0].finish_reason`, and the existing provider silently discar
 it. That is a change for the contract's owner to make deliberately, not one to take
 unilaterally inside a vendor integration.
 
+**Every file the exercise shipped is still at its original path.** Nothing was
+renamed, moved, or restructured: `llm/llm.py` is byte-identical, `llm/together.py`
+differs by one import line, and the original brief is preserved verbatim in
+`README.md`. Additions live in new files and new directories. A reviewer can diff this
+branch against the starting commit and see only additions plus one bug fix, which
+keeps the review cheap and makes the integration easy to reason about.
+
 The one edit to `llm/together.py` is a one-line bug fix, not a contract change: it did
 `from llm import LLM` inside `llm/together.py`, a circular import that resolves only
 by accident of import order. It is now `from .llm import LLM`.
