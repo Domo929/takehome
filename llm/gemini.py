@@ -27,6 +27,7 @@ ceiling that no vendor response will ever tell you about.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from typing import Any
@@ -35,6 +36,10 @@ import httpx
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
+
+# The SDK logs an automatic-function-calling advisory on every generate_content call.
+# We pass no tools, so it is pure noise that would drown a load-test log.
+logging.getLogger("google_genai.models").setLevel(logging.ERROR)
 
 from .errors import (
     LLMAuthenticationError,

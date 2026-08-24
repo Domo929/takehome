@@ -1,0 +1,376 @@
+"""Load harness (the *subject* under test).
+
+This drives the real production code path: ``llm/gemini.py``, its connection pool,
+its retry engine, running on Python's event loop. Whatever ceiling this hits is the
+ceiling the product hits. The k6 harness in ``loadtest/k6/`` exists as an independent
+control against the same endpoint; the gap between the two is the cost of this client.
+
+Closed loop vs open loop
+------------------------
+Both are provided because they answer different questions.
+
+*Closed loop* holds N requests in flight and issues a new one only as an old one
+finishes. It measures what a batch pipeline with N workers achieves, which is the
+shape of the production workload here. Its weakness is coordinated omission: when the
+service slows down, the driver issues fewer requests, so recorded latency understates
+what a real arrival stream would experience.
+
+*Open loop* issues requests at a fixed arrival rate regardless of whether earlier ones
+completed. It reproduces bursty traffic honestly and exposes queue growth, at the cost
+of being able to overwhelm the driver itself.
+
+Reporting only closed-loop numbers is the most common way a load test flatters the
+system it is measuring, so both are recorded and compared.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import os
+import statistics
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+from harness.budget import BudgetExceeded, CostEstimate, CostGovernor, confirm_or_exit
+from harness.workload import Prompt, build_corpus, corpus_fingerprint, mean_input_chars
+from llm.errors import LLMError
+from llm.gemini import Gemini
+from llm.llm import LLM
+from llm.metrics import EventLoopLagMonitor, serve as serve_metrics
+
+
+@dataclass
+class RequestRecord:
+    """One attempt through the provider, success or failure."""
+
+    prompt_id: str
+    kind: str
+    started_at: float
+    latency_ms: float
+    ok: bool
+    finish_reason: str = ""
+    error_class: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    thinking_tokens: int = 0
+    cost_usd: float = 0.0
+    attempts: int = 1
+    # Open loop only: how long the request waited past its scheduled start. Rising
+    # schedule lag means the driver, not the service, is falling behind.
+    schedule_lag_ms: float = 0.0
+
+
+@dataclass
+class StageResult:
+    label: str
+    mode: str
+    concurrency: int
+    arrival_rate: float
+    duration_s: float
+    records: list[RequestRecord] = field(default_factory=list)
+
+    def summary(self) -> dict[str, Any]:
+        oks = [r for r in self.records if r.ok]
+        lat = sorted(r.latency_ms for r in oks)
+        errors: dict[str, int] = {}
+        finishes: dict[str, int] = {}
+        for r in self.records:
+            if not r.ok:
+                errors[r.error_class] = errors.get(r.error_class, 0) + 1
+            if r.finish_reason:
+                finishes[r.finish_reason] = finishes.get(r.finish_reason, 0) + 1
+
+        def pct(p: float) -> float:
+            if not lat:
+                return 0.0
+            idx = min(len(lat) - 1, int(round((p / 100.0) * (len(lat) - 1))))
+            return lat[idx]
+
+        total = len(self.records)
+        out_tokens = sum(r.output_tokens for r in oks)
+        return {
+            "label": self.label,
+            "mode": self.mode,
+            "concurrency": self.concurrency,
+            "arrival_rate": self.arrival_rate,
+            "duration_s": round(self.duration_s, 3),
+            "requests": total,
+            "successful": len(oks),
+            "error_rate": round((total - len(oks)) / total, 5) if total else 0.0,
+            "throughput_rps": round(len(oks) / self.duration_s, 3) if self.duration_s else 0.0,
+            "output_tokens_per_s": round(out_tokens / self.duration_s, 1) if self.duration_s else 0.0,
+            "latency_ms": {
+                "p50": round(pct(50), 1),
+                "p90": round(pct(90), 1),
+                "p95": round(pct(95), 1),
+                "p99": round(pct(99), 1),
+                "max": round(lat[-1], 1) if lat else 0.0,
+                "mean": round(statistics.fmean(lat), 1) if lat else 0.0,
+            },
+            "mean_schedule_lag_ms": (
+                round(statistics.fmean([r.schedule_lag_ms for r in self.records]), 1)
+                if self.mode == "open" and self.records else 0.0
+            ),
+            "retries": sum(max(0, r.attempts - 1) for r in self.records),
+            "cost_usd": round(sum(r.cost_usd for r in self.records), 6),
+            "tokens": {
+                "input": sum(r.input_tokens for r in self.records),
+                "output": sum(r.output_tokens for r in self.records),
+                "thinking": sum(r.thinking_tokens for r in self.records),
+            },
+            "errors_by_class": errors,
+            "finish_reasons": finishes,
+        }
+
+
+async def _one_request(
+    provider: LLM,
+    prompt: Prompt,
+    governor: CostGovernor,
+    *,
+    scheduled_at: float = 0.0,
+) -> RequestRecord:
+    await governor.reserve()
+
+    started = time.perf_counter()
+    lag_ms = max(0.0, (started - scheduled_at) * 1000.0) if scheduled_at else 0.0
+    try:
+        result = await provider.ask_generic_question(prompt.system, prompt.question, 0.7)
+    except LLMError as err:
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        return RequestRecord(
+            prompt_id=prompt.id, kind=prompt.kind, started_at=started,
+            latency_ms=latency_ms, ok=False, error_class=err.error_class,
+            schedule_lag_ms=lag_ms,
+        )
+
+    latency_ms = (time.perf_counter() - started) * 1000.0
+    await governor.record(
+        cost_usd=result.cost_usd or 0.0,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        thinking_tokens=result.thinking_tokens,
+    )
+    return RequestRecord(
+        prompt_id=prompt.id, kind=prompt.kind, started_at=started, latency_ms=latency_ms,
+        ok=result.is_usable, finish_reason=result.finish_reason.value,
+        input_tokens=result.input_tokens, output_tokens=result.output_tokens,
+        thinking_tokens=result.thinking_tokens, cost_usd=result.cost_usd or 0.0,
+        attempts=result.attempts, schedule_lag_ms=lag_ms,
+    )
+
+
+async def run_closed_loop(
+    provider: LLM, prompts: list[Prompt], governor: CostGovernor,
+    *, concurrency: int, requests: int, label: str,
+) -> StageResult:
+    sem = asyncio.Semaphore(concurrency)
+    stage = StageResult(label=label, mode="closed", concurrency=concurrency, arrival_rate=0.0, duration_s=0.0)
+    stopped = asyncio.Event()
+
+    async def worker(index: int) -> None:
+        if stopped.is_set():
+            return
+        async with sem:
+            if stopped.is_set():
+                return
+            try:
+                record = await _one_request(provider, prompts[index % len(prompts)], governor)
+            except BudgetExceeded as exc:
+                if not stopped.is_set():
+                    print(f"\n  budget breaker: {exc}")
+                stopped.set()
+                return
+            stage.records.append(record)
+
+    started = time.perf_counter()
+    await asyncio.gather(*(worker(i) for i in range(requests)))
+    stage.duration_s = time.perf_counter() - started
+    return stage
+
+
+async def run_open_loop(
+    provider: LLM, prompts: list[Prompt], governor: CostGovernor,
+    *, arrival_rate: float, duration_s: float, label: str,
+) -> StageResult:
+    """Dispatch at a fixed rate regardless of completions.
+
+    Requests are scheduled against a wall-clock grid rather than by sleeping between
+    dispatches, so the driver's own overhead does not silently reduce the arrival
+    rate. The residual difference is recorded as ``schedule_lag_ms``.
+    """
+    stage = StageResult(
+        label=label, mode="open", concurrency=0, arrival_rate=arrival_rate, duration_s=0.0
+    )
+    interval = 1.0 / arrival_rate
+    tasks: list[asyncio.Task] = []
+    stopped = asyncio.Event()
+    started = time.perf_counter()
+    index = 0
+
+    async def dispatch(prompt: Prompt, scheduled_at: float) -> None:
+        try:
+            record = await _one_request(provider, prompt, governor, scheduled_at=scheduled_at)
+        except BudgetExceeded as exc:
+            if not stopped.is_set():
+                print(f"\n  budget breaker: {exc}")
+            stopped.set()
+            return
+        stage.records.append(record)
+
+    while not stopped.is_set():
+        scheduled = started + index * interval
+        now = time.perf_counter()
+        if scheduled > now:
+            await asyncio.sleep(scheduled - now)
+        if time.perf_counter() - started >= duration_s:
+            break
+        tasks.append(asyncio.create_task(dispatch(prompts[index % len(prompts)], scheduled)))
+        index += 1
+
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    stage.duration_s = time.perf_counter() - started
+    return stage
+
+
+def write_ledger(path: Path, stage: StageResult) -> None:
+    """Per-request JSONL, so the analysis can be regenerated without re-spending."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as fh:
+        for record in stage.records:
+            fh.write(json.dumps(asdict(record)) + "\n")
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Load harness for the Gemini provider. Dry run unless --confirm is passed."
+    )
+    p.add_argument("--mode", choices=["closed", "open"], default="closed")
+    p.add_argument("--concurrency", type=int, nargs="+", default=[8],
+                   help="Closed loop: in-flight request cap. Accepts several for a sweep.")
+    p.add_argument("--arrival-rate", type=float, nargs="+", default=[5.0],
+                   help="Open loop: requests per second. Accepts several for a sweep.")
+    p.add_argument("--requests", type=int, default=100, help="Closed loop: requests per stage.")
+    p.add_argument("--duration", type=float, default=30.0, help="Open loop: seconds per stage.")
+    p.add_argument("--corpus-size", type=int, default=200)
+    p.add_argument("--complex-fraction", type=float, default=0.0)
+    p.add_argument("--thinking-budget", type=int, default=None)
+    p.add_argument("--max-output-tokens", type=int, default=None)
+    p.add_argument("--max-connections", type=int, default=None)
+    p.add_argument("--budget-usd", type=float, default=1.0, help="Hard ceiling. The run stops at it.")
+    p.add_argument("--est-output-tokens", type=int, default=200,
+                   help="Expected output tokens per request, used for the pre-flight estimate.")
+    p.add_argument("--confirm", action="store_true", help="Actually spend money.")
+    p.add_argument("--metrics-port", type=int, default=0, help="Serve /metrics for Prometheus.")
+    p.add_argument("--out", type=Path, default=Path("results"))
+    p.add_argument("--label", default="run")
+    return p.parse_args()
+
+
+async def main_async(args: argparse.Namespace) -> None:
+    prompts = build_corpus(size=args.corpus_size, complex_fraction=args.complex_fraction)
+
+    stages = args.concurrency if args.mode == "closed" else args.arrival_rate
+    per_stage = args.requests if args.mode == "closed" else None
+    total_requests = (
+        args.requests * len(stages) if args.mode == "closed"
+        else int(sum(rate * args.duration for rate in args.arrival_rate))
+    )
+
+    est_input_tokens = int(mean_input_chars(prompts) * 0.27) + 32
+    estimate = CostEstimate(
+        requests=total_requests,
+        input_tokens_each=est_input_tokens,
+        output_tokens_each=args.est_output_tokens,
+        model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+    )
+    confirm_or_exit(estimate, confirmed=args.confirm, budget_usd=args.budget_usd)
+
+    provider = Gemini(
+        thinking_budget=args.thinking_budget,
+        max_output_tokens=args.max_output_tokens,
+        max_connections=args.max_connections,
+    )
+    governor = CostGovernor(
+        budget_usd=args.budget_usd,
+        model=provider.model,
+        expected_cost_per_request=estimate.total_usd / max(1, total_requests),
+    )
+
+    if args.metrics_port:
+        serve_metrics(args.metrics_port)
+        print(f"  metrics on :{args.metrics_port}/metrics")
+
+    lag = EventLoopLagMonitor()
+    lag.start()
+
+    manifest: dict[str, Any] = {
+        "label": args.label,
+        "mode": args.mode,
+        "provider": provider.describe(),
+        "corpus": {
+            "size": len(prompts),
+            "fingerprint": corpus_fingerprint(prompts),
+            "mean_input_chars": round(mean_input_chars(prompts), 1),
+            "complex_fraction": args.complex_fraction,
+        },
+        "estimate_usd": round(estimate.total_usd, 6),
+        "started_at": time.time(),
+        "stages": [],
+    }
+
+    print(f"\nRunning {args.mode} loop against {provider.backend}:{provider.model}\n")
+    try:
+        for value in stages:
+            if args.mode == "closed":
+                print(f"  stage concurrency={value} requests={per_stage} ...", flush=True)
+                stage = await run_closed_loop(
+                    provider, prompts, governor,
+                    concurrency=int(value), requests=per_stage,
+                    label=f"{args.label}-c{int(value)}",
+                )
+            else:
+                print(f"  stage arrival_rate={value}/s duration={args.duration}s ...", flush=True)
+                stage = await run_open_loop(
+                    provider, prompts, governor,
+                    arrival_rate=float(value), duration_s=args.duration,
+                    label=f"{args.label}-r{value}",
+                )
+
+            summary = stage.summary()
+            manifest["stages"].append(summary)
+            write_ledger(args.out / f"{stage.label}.jsonl", stage)
+            print(
+                f"    {summary['successful']}/{summary['requests']} ok  "
+                f"{summary['throughput_rps']} rps  "
+                f"p50 {summary['latency_ms']['p50']}ms  "
+                f"p99 {summary['latency_ms']['p99']}ms  "
+                f"${summary['cost_usd']:.4f}"
+            )
+            if governor.tripped:
+                print("  stopping: budget exhausted")
+                break
+    finally:
+        await lag.stop()
+
+    manifest["actual_usd"] = round(governor.spent_usd, 6)
+    manifest["finished_at"] = time.time()
+    args.out.mkdir(parents=True, exist_ok=True)
+    (args.out / f"{args.label}-manifest.json").write_text(json.dumps(manifest, indent=2))
+
+    print("\nCost reconciliation")
+    print(governor.summary(estimate))
+    print(f"\nWrote {args.out / f'{args.label}-manifest.json'}")
+
+
+def main() -> None:
+    asyncio.run(main_async(parse_args()))
+
+
+if __name__ == "__main__":
+    main()
