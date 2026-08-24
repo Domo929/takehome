@@ -202,6 +202,23 @@ service_admission_rejected_total = Counter(
     registry=REGISTRY,
 )
 
+service_retry_backoff_seconds = Histogram(
+    "service_retry_backoff_seconds",
+    "Time spent sleeping between retry attempts. Neither our processing cost nor the "
+    "vendor's response time, so attributed separately rather than folded into either.",
+    buckets=(
+        0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, float("inf"),
+    ),
+    registry=REGISTRY,
+)
+
+service_upstream_seconds = Histogram(
+    "service_upstream_seconds",
+    "Vendor time summed across all attempts for one inbound request.",
+    buckets=_LATENCY_BUCKETS,
+    registry=REGISTRY,
+)
+
 service_inflight = Gauge(
     "service_inflight_requests",
     "Inbound requests currently being served.",

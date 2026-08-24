@@ -11,10 +11,16 @@ silently overlapping panels. Run this and commit the output.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 
 DS = {"type": "prometheus", "uid": "prometheus"}
 OUT = pathlib.Path(__file__).parent / "grafana" / "dashboards" / "overview.json"
+
+# Drawn as a reference line on the spend panels. Matches SERVICE_BUDGET_USD; the
+# live ceiling series is derived from the metrics themselves so the two agree even
+# if the service is started with a different value.
+BUDGET_USD = float(os.getenv("SERVICE_BUDGET_USD", "25"))
 
 _id = 0
 
@@ -78,7 +84,7 @@ def stat(title: str, expr: str, x: int, y: int, *, unit="short", decimals=1,
 
 def ts(title: str, tgts: list[dict], x: int, y: int, *, unit="short", w=12, h=8,
        stack=False, desc="", fill=10, decimals=None, minv=None, maxv=None,
-       legend_table=False) -> dict:
+       legend_table=False, limit=None, limit_label="limit") -> dict:
     custom = {
         "fillOpacity": fill,
         "lineWidth": 1,
@@ -95,6 +101,17 @@ def ts(title: str, tgts: list[dict], x: int, y: int, *, unit="short", w=12, h=8,
         defaults["min"] = minv
     if maxv is not None:
         defaults["max"] = maxv
+    if limit is not None:
+        # A dashed red line at the configured ceiling, so how much headroom remains is
+        # visible at a glance instead of requiring mental arithmetic against the axis.
+        defaults["thresholds"] = {
+            "mode": "absolute",
+            "steps": [
+                {"color": "green", "value": None},
+                {"color": "red", "value": limit},
+            ],
+        }
+        custom["thresholdsStyle"] = {"mode": "dashed"}
     return {
         "id": nid(),
         "type": "timeseries",
@@ -153,9 +170,14 @@ panels += [
          desc="Inbound requests currently being served."),
     stat("Spent", "sum(llm_spend_usd_total)", 18, y, unit="currencyUSD", decimals=4,
          desc="Actual spend from reported usage metadata."),
-    stat("Budget left", "llm_budget_remaining_usd", 21, y, unit="currencyUSD", decimals=4,
-         steps=[{"color": "red", "value": None}, {"color": "yellow", "value": 0.5},
-                {"color": "green", "value": 2}]),
+    stat("Budget left", "max(llm_budget_remaining_usd)", 21, y, unit="currencyUSD",
+         decimals=4,
+         steps=[{"color": "red", "value": None},
+                {"color": "orange", "value": BUDGET_USD * 0.1},
+                {"color": "yellow", "value": BUDGET_USD * 0.25},
+                {"color": "green", "value": BUDGET_USD * 0.5}],
+         desc="Thresholds are fractions of SERVICE_BUDGET_USD: red under 10%, "
+              "orange under 25%, yellow under 50%."),
 ]
 y += 4
 
@@ -173,22 +195,28 @@ panels.append(text(
 y += 3
 panels += [
     ts("Latency composition, p99 (stacked)", targets(
-        ('histogram_quantile(0.99, sum by (le) (rate(llm_request_duration_seconds_bucket[1m])))',
-         "upstream (vendor)"),
+        ('histogram_quantile(0.99, sum by (le) (rate(service_upstream_seconds_bucket[1m])))',
+         "upstream, all attempts (vendor)"),
+        ('histogram_quantile(0.99, sum by (le) (rate(service_retry_backoff_seconds_bucket[1m])))',
+         "retry backoff (deliberate)"),
         ('histogram_quantile(0.99, sum by (le) (rate(service_queue_wait_seconds_bucket[1m])))',
-         "queue wait (ours)"),
-        ('clamp_min(histogram_quantile(0.99, sum by (le) (rate(service_overhead_seconds_bucket[1m]))) '
-         '- histogram_quantile(0.99, sum by (le) (rate(service_queue_wait_seconds_bucket[1m]))), 0)',
+         "admission queue (ours)"),
+        ('histogram_quantile(0.99, sum by (le) (rate(service_overhead_seconds_bucket[1m])))',
          "framework (ours)"),
     ), 0, y, unit="s", stack=True, legend_table=True,
-        desc="Stacked p99 contributions. Quantiles are not strictly additive, so read "
-             "this as proportion rather than exact arithmetic."),
+        desc="Four separate costs. Upstream sums every attempt, so a retried request "
+             "does not charge its failed attempts to us. Retry backoff is deliberate "
+             "waiting, not processing. Only the bottom two layers are code we can "
+             "make faster. Quantiles are not strictly additive, so read proportions "
+             "rather than exact sums."),
     ts("Our overhead vs vendor time", targets(
         ('histogram_quantile(0.99, sum by (le) (rate(service_overhead_seconds_bucket[1m])))',
          "our overhead p99"),
         ('histogram_quantile(0.50, sum by (le) (rate(service_overhead_seconds_bucket[1m])))',
          "our overhead p50"),
-        ('histogram_quantile(0.99, sum by (le) (rate(llm_request_duration_seconds_bucket[1m])))',
+        ('histogram_quantile(0.99, sum by (le) (rate(service_retry_backoff_seconds_bucket[1m])))',
+         "retry backoff p99"),
+        ('histogram_quantile(0.99, sum by (le) (rate(service_upstream_seconds_bucket[1m])))',
          "vendor p99"),
     ), 12, y, unit="s", legend_table=True,
         desc="Our overhead should stay flat as load rises. If it climbs with traffic, "
@@ -263,9 +291,13 @@ panels += [
          steps=[{"color": "red", "value": None}, {"color": "yellow", "value": 300},
                 {"color": "green", "value": 1800}],
          desc="Remaining budget at the current burn rate."),
-    ts("Cumulative spend", targets(
+    ts("Cumulative spend vs ceiling", targets(
         ('sum by (model) (llm_spend_usd_total)', "{{model}}"),
-    ), 12, y, unit="currencyUSD", w=12, h=8, decimals=4),
+        ('sum(llm_spend_usd_total) + max(llm_budget_remaining_usd)', "ceiling"),
+    ), 12, y, unit="currencyUSD", w=12, h=8, decimals=4, limit=BUDGET_USD,
+        desc="The ceiling series is derived as spent + remaining, so it tracks "
+             "SERVICE_BUDGET_USD without the dashboard having to be told it. The "
+             "dashed line is the build-time default."),
 ]
 y += 4
 panels.append(

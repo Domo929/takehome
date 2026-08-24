@@ -447,7 +447,7 @@
       "id": 9,
       "type": "stat",
       "title": "Budget left",
-      "description": "",
+      "description": "Thresholds are fractions of SERVICE_BUDGET_USD: red under 10%, orange under 25%, yellow under 50%.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -473,12 +473,16 @@
                 "value": null
               },
               {
+                "color": "orange",
+                "value": 2.5
+              },
+              {
                 "color": "yellow",
-                "value": 0.5
+                "value": 6.25
               },
               {
                 "color": "green",
-                "value": 2
+                "value": 12.5
               }
             ]
           }
@@ -499,7 +503,7 @@
       },
       "targets": [
         {
-          "expr": "llm_budget_remaining_usd",
+          "expr": "max(llm_budget_remaining_usd)",
           "legendFormat": "Budget left",
           "refId": "A",
           "datasource": {
@@ -542,7 +546,7 @@
       "id": 12,
       "type": "timeseries",
       "title": "Latency composition, p99 (stacked)",
-      "description": "Stacked p99 contributions. Quantiles are not strictly additive, so read this as proportion rather than exact arithmetic.",
+      "description": "Four separate costs. Upstream sums every attempt, so a retried request does not charge its failed attempts to us. Retry backoff is deliberate waiting, not processing. Only the bottom two layers are code we can make faster. Quantiles are not strictly additive, so read proportions rather than exact sums.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -585,8 +589,8 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(llm_request_duration_seconds_bucket[1m])))",
-          "legendFormat": "upstream (vendor)",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(service_upstream_seconds_bucket[1m])))",
+          "legendFormat": "upstream, all attempts (vendor)",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -594,8 +598,8 @@
           }
         },
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(service_queue_wait_seconds_bucket[1m])))",
-          "legendFormat": "queue wait (ours)",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(service_retry_backoff_seconds_bucket[1m])))",
+          "legendFormat": "retry backoff (deliberate)",
           "refId": "B",
           "datasource": {
             "type": "prometheus",
@@ -603,9 +607,18 @@
           }
         },
         {
-          "expr": "clamp_min(histogram_quantile(0.99, sum by (le) (rate(service_overhead_seconds_bucket[1m]))) - histogram_quantile(0.99, sum by (le) (rate(service_queue_wait_seconds_bucket[1m]))), 0)",
-          "legendFormat": "framework (ours)",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(service_queue_wait_seconds_bucket[1m])))",
+          "legendFormat": "admission queue (ours)",
           "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(service_overhead_seconds_bucket[1m])))",
+          "legendFormat": "framework (ours)",
+          "refId": "D",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -674,9 +687,18 @@
           }
         },
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(llm_request_duration_seconds_bucket[1m])))",
-          "legendFormat": "vendor p99",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(service_retry_backoff_seconds_bucket[1m])))",
+          "legendFormat": "retry backoff p99",
           "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(service_upstream_seconds_bucket[1m])))",
+          "legendFormat": "vendor p99",
+          "refId": "D",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -1373,8 +1395,8 @@
     {
       "id": 27,
       "type": "timeseries",
-      "title": "Cumulative spend",
-      "description": "",
+      "title": "Cumulative spend vs ceiling",
+      "description": "The ceiling series is derived as spent + remaining, so it tracks SERVICE_BUDGET_USD without the dashboard having to be told it. The dashed line is the build-time default.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1392,9 +1414,25 @@
             "fillOpacity": 10,
             "lineWidth": 1,
             "showPoints": "never",
-            "spanNulls": true
+            "spanNulls": true,
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
           },
-          "decimals": 4
+          "decimals": 4,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 25.0
+              }
+            ]
+          }
         },
         "overrides": []
       },
@@ -1414,6 +1452,15 @@
           "expr": "sum by (model) (llm_spend_usd_total)",
           "legendFormat": "{{model}}",
           "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        },
+        {
+          "expr": "sum(llm_spend_usd_total) + max(llm_budget_remaining_usd)",
+          "legendFormat": "ceiling",
+          "refId": "B",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"

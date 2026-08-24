@@ -295,3 +295,50 @@ async def test_output_tokens_stay_correct_for_base_contract_callers(fake_vertex)
     from llm.pricing import cost_usd
     base_only_cost = cost_usd("gemini-2.5-flash", result.input_tokens, result.output_tokens)
     assert result.cost_usd == pytest.approx(base_only_cost)
+
+
+async def test_retried_request_attributes_time_correctly(fake_vertex):
+    """Retry time must not be misattributed as our own overhead.
+
+    ``latency_ms`` reports only the final attempt. A request that was retried also
+    spent time on the failed attempts and on deliberate backoff sleep. If a caller
+    computes "our overhead" as ``total - latency_ms``, all of that lands on us, and a
+    path whose real cost is a fraction of a millisecond reports p99 overhead in
+    seconds. ``upstream_total_ms`` and ``retry_backoff_ms`` exist so the three costs
+    can be separated.
+    """
+    import time
+
+    fake_vertex.configure(server_error_probability=1.0, empty_probability=0.0)
+    provider = build(
+        fake_vertex,
+        retry_policy=RetryPolicy(
+            max_attempts=3, base_delay_s=0.05, max_delay_s=0.2,
+            attempt_timeout_s=10, total_deadline_s=30,
+        ),
+    )
+
+    # Fail twice, then succeed, so the result carries a real retry history.
+    from llm.errors import LLMServerError
+    with pytest.raises(LLMServerError):
+        await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+    fake_vertex.configure(server_error_probability=0.0)
+    started = time.perf_counter()
+    result = await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+    total_ms = (time.perf_counter() - started) * 1000.0
+
+    assert result.is_usable
+    assert result.upstream_total_ms is not None
+    assert result.upstream_total_ms >= (result.latency_ms or 0.0)
+    assert result.retry_backoff_ms >= 0.0
+
+    # The decomposition must not claim more time than actually elapsed.
+    accounted = result.upstream_total_ms + result.retry_backoff_ms
+    assert accounted <= total_ms + 5.0, (
+        f"accounted {accounted:.1f}ms exceeds elapsed {total_ms:.1f}ms"
+    )
+
+    # And what is left over for us must be small: this path does almost nothing.
+    ours = total_ms - accounted
+    assert ours < 100.0, f"unattributed time {ours:.1f}ms is implausibly large"

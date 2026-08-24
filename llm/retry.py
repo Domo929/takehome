@@ -111,6 +111,13 @@ class RetryOutcome:
         self.attempts = 0
         self.retries_by_reason: dict[str, int] = {}
         self.budget_exhausted = False
+        # Wall time spent sleeping between attempts. Tracked separately because it is
+        # neither our processing cost nor the vendor's response time: it is a
+        # deliberate wait we chose. Folding it into either one misattributes it.
+        self.backoff_s = 0.0
+        # Wall time spent inside vendor calls, summed across every attempt. The last
+        # attempt's latency alone understates a retried request.
+        self.upstream_s = 0.0
 
     def note_retry(self, reason: str) -> None:
         self.retries_by_reason[reason] = self.retries_by_reason.get(reason, 0) + 1
@@ -172,7 +179,9 @@ async def with_retries(
         outcome.note_retry(last.error_class)
         if on_retry is not None:
             on_retry(last, delay, attempt + 1)
+        slept_at = time.monotonic()
         await asyncio.sleep(delay)
+        outcome.backoff_s += time.monotonic() - slept_at
 
     assert last is not None
     raise last

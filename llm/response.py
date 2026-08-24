@@ -68,6 +68,11 @@ class GeminiResponse(LLM.SimpleResponse):
     thinking_tokens: int = 0
     finish_reason: FinishReason = FinishReason.UNKNOWN
     latency_ms: float | None = None
+    # Vendor time summed across every attempt. Equals latency_ms for a single-attempt
+    # request; larger when retries occurred.
+    upstream_total_ms: float | None = None
+    # Time deliberately spent sleeping between attempts.
+    retry_backoff_ms: float = 0.0
     attempts: int = 1
     model: str | None = None
     provider: str | None = None

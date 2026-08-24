@@ -62,6 +62,8 @@ from llm.metrics import (
     service_queue_wait_seconds,
     service_request_duration_seconds,
     service_requests_total,
+    service_retry_backoff_seconds,
+    service_upstream_seconds,
 )
 
 
@@ -79,6 +81,7 @@ class AskResponse(BaseModel):
     finish_reason: str
     cost_usd: float
     upstream_ms: float
+    retry_backoff_ms: float
     overhead_ms: float
     queue_wait_ms: float
     attempts: int
@@ -215,17 +218,27 @@ async def ask(payload: AskRequest) -> JSONResponse:
             service_inflight.set(state.inflight)
 
     total = time.perf_counter() - started
-    upstream_s = (result.latency_ms or 0.0) / 1000.0
+
+    # Vendor time across ALL attempts, not just the last one. Using only the final
+    # attempt made a retried request look as though our layer had stalled for the
+    # duration of the failed attempts plus their backoff, which produced p99
+    # "overhead" in the seconds on a path whose real cost is a fraction of a
+    # millisecond.
+    upstream_s = (result.upstream_total_ms or result.latency_ms or 0.0) / 1000.0
+    backoff_s = (result.retry_backoff_ms or 0.0) / 1000.0
 
     if state.budget_usd > 0:
         state.spent_usd += result.cost_usd or 0.0
         budget_remaining_usd.set(max(0.0, state.budget_usd - state.spent_usd))
 
-    # The headline number: everything that was not waiting on Vertex. Framework,
-    # validation, JSON, event-loop scheduling, admission queueing.
-    overhead = max(0.0, total - upstream_s)
+    # Everything that is genuinely ours: framework, validation, JSON, event-loop
+    # scheduling, admission queueing. Vendor time and deliberate retry sleep are both
+    # excluded because neither is a cost our code can reduce.
+    overhead = max(0.0, total - upstream_s - backoff_s)
     service_request_duration_seconds.labels(outcome="success").observe(total)
     service_overhead_seconds.observe(overhead)
+    service_upstream_seconds.observe(upstream_s)
+    service_retry_backoff_seconds.observe(backoff_s)
     service_requests_total.labels(
         outcome="success", finish_reason=result.finish_reason.value
     ).inc()
@@ -239,6 +252,7 @@ async def ask(payload: AskRequest) -> JSONResponse:
             finish_reason=result.finish_reason.value,
             cost_usd=result.cost_usd or 0.0,
             upstream_ms=round(upstream_s * 1000, 2),
+            retry_backoff_ms=round(backoff_s * 1000, 2),
             overhead_ms=round(overhead * 1000, 2),
             queue_wait_ms=round(queue_wait * 1000, 2),
             attempts=result.attempts,

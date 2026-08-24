@@ -377,6 +377,10 @@ class Gemini(LLM):
                     model=self._model, contents=question, config=config
                 )
             except Exception as exc:
+                # Count the failed attempt's wall time as vendor time. It was spent
+                # waiting on them, and omitting it would silently reappear as our
+                # overhead in the caller's decomposition.
+                outcome_tracker.upstream_s += time.perf_counter() - started
                 raise self._translate(exc) from exc
             finally:
                 self._inflight -= 1
@@ -386,6 +390,7 @@ class Gemini(LLM):
                 )
 
             latency_ms = (time.perf_counter() - started) * 1000.0
+            outcome_tracker.upstream_s += latency_ms / 1000.0
             parsed = self._parse(raw, latency_ms, outcome_tracker.attempts)
 
             if not parsed.answer:
@@ -433,4 +438,6 @@ class Gemini(LLM):
                 )
 
         result.attempts = outcome_tracker.attempts
+        result.upstream_total_ms = outcome_tracker.upstream_s * 1000.0
+        result.retry_backoff_ms = outcome_tracker.backoff_s * 1000.0
         return result

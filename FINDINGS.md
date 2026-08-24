@@ -261,6 +261,47 @@ framework dispatch — which the service cannot see from the inside. Both number
 worth having: the internal one localizes regressions, the k6 one is what a caller
 actually experiences.
 
+### An instrumentation bug that would have libeled our own code
+
+The first version of the overhead metric computed `total - latency_ms`, where
+`latency_ms` is the *final* attempt's vendor latency. On a retried request that
+silently charged us for the failed attempts **and** for the deliberate backoff sleep
+between them. With a 4% injected failure rate the histogram looked like this:
+
+```
+<= 0.0005s : 2027 requests   (93%)
+<= 1.0s    :   +31
+<= 2.0s    :   +90           <- dragged p99 to 1807 ms
+```
+
+p50 read 0.27 ms and p99 read **1807 ms** for a code path whose real cost is a
+fraction of a millisecond. The number was not merely wrong, it pointed at the wrong
+component: anyone reading that dashboard would have concluded the Python layer was
+stalling for seconds and gone looking for a bug that did not exist.
+
+The fix is to attribute all three costs separately. `upstream_total_ms` sums vendor
+time across *every* attempt, `retry_backoff_ms` records deliberate sleep, and overhead
+is what remains:
+
+```
+attempts=4  upstream=506.5ms  backoff=3785.8ms  ours=11.16ms   (total 4303ms)
+attempts=1  upstream=467.4ms  backoff=   0.0ms  ours= 0.29ms
+```
+
+After the fix, under load with the same failure injection:
+
+| | before | after |
+|---|---|---|
+| our overhead p50 | 0.27 ms | 0.25 ms |
+| our overhead p99 | **1807 ms** | **0.50 ms** |
+| retry backoff p99 | *(hidden inside overhead)* | 1518 ms |
+
+The lesson generalizes: a latency decomposition that does not account for retries will
+blame the component doing the retrying. The dashboard now stacks four separate layers
+— vendor, retry backoff, admission queue, framework — and only the bottom two are code
+we can make faster. `test_retried_request_attributes_time_correctly` asserts the
+decomposition never claims more time than actually elapsed.
+
 ### It sheds load instead of collapsing
 
 Capacity is `provider.parallelism()` = 102 concurrent. With a ~0.4 s backend, Little's
