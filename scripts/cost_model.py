@@ -14,8 +14,11 @@ this cost, and which levers actually move it".
 Per-request token counts are measured, not guessed — taken from the live runs in
 ``results/real/``:
 
-    thinking off  ->  37.3 input, 79.7 output (0 thinking)
-    thinking on   ->  39.9 input, 571.2 output (477.3 thinking)
+    thinking off  ->  35.3 input, 108.9 output (0 thinking)
+    thinking on   ->  35.3 input, 460.6 output (368.5 thinking)
+
+Measured on **Vertex** (project ``evertune-tests``), which is the production target.
+Developer API numbers differ; see FINDINGS section 4.
 
 Levers modelled
 ---------------
@@ -36,9 +39,10 @@ from __future__ import annotations
 import argparse
 
 # Measured, per successful request. See results/real/*-manifest.json.
+# Per successful request, measured on Vertex. See results/real/vertex-tb*-manifest.json.
 PROFILES = {
-    "thinking-off": {"input": 37.3, "output": 79.7, "thinking": 0.0},
-    "thinking-dynamic": {"input": 39.9, "output": 571.2, "thinking": 477.3},
+    "thinking-off": {"input": 35.3, "output": 108.9, "thinking": 0.0},
+    "thinking-dynamic": {"input": 35.3, "output": 460.6, "thinking": 368.5},
 }
 
 PRICE_IN = 0.30

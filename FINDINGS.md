@@ -28,20 +28,23 @@ which do not, and "the Google API" is ambiguous between them.
 | Auth | API key | ADC / service account + a GCP project |
 | Quota | **Fixed and published per tier**, enforced with 429s | **Dynamic Shared Quota** — not published, varies by region, load and time |
 | Capacity guarantees | none | optional Provisioned Throughput |
-| Used here so far | **yes** — all live measurements | **not yet** — needs Evertune's project |
+| Measured here | yes — early findings | yes — project `evertune-tests` |
 
 Both speak the same model and the same `generateContent` contract, which is why one
 provider can target either (`GEMINI_BACKEND=developer|vertex`). They are not
 interchangeable for capacity work: different quota pools, different endpoints,
 different scaling behaviour.
 
-**Everything measured in this document so far used the Developer API.** The take-home
-targets Vertex, and the harness is built for it, but I have not had credentials for a
-Vertex project. Where a finding is a property of the *model* — token economics,
-thinking behaviour, finish reasons, payload validation — it transfers. Where a finding
-is a property of the *serving tier* — throughput ceilings, where 429s begin, tail
-latency under saturation — it does not, and I have marked those as pending rather than
-presenting Developer API numbers as Vertex capacity.
+**Both tiers have now been measured.** Early findings were taken on the Developer API
+before Vertex credentials were available; the headline experiments have since been
+repeated against Vertex (project `evertune-tests`) and the differences were material
+enough to correct published numbers — see §4.
+
+The distinction matters in the direction the caveat predicted. Model behaviour —
+token economics, thinking mechanics, finish reasons, payload validation — transfers
+cleanly. Latency and capacity do not: on identical requests Vertex was **1.36x slower
+at p50 and 1.74x slower at p99**, and the thinking cost ratio moved from 6.8x to 4.1x.
+Any number in this document that describes performance names its tier.
 
 ### What our own key allows
 
@@ -190,22 +193,37 @@ provider derives one from the other so they cannot drift apart.
 
 ---
 
-## 4. Dynamic thinking costs 6.3x more and is the SDK default *(measured on real Gemini)*
+## 4. Dynamic thinking costs 4.1x more on Vertex, and is the SDK default *(measured on Vertex and the Developer API)*
 
-These are live measurements against the Gemini Developer API, not the mock. See the
-caveat at the end of this section about what does and does not transfer to Vertex.
+Measured on **both** serving tiers: Vertex AI (`evertune-tests`, the production
+target) and the Gemini Developer API. Fifteen requests per configuration, identical
+brand-recommendation prompts, concurrency 3.
 
 `thinking_budget` and `max_output_tokens` draw on **one shared allowance**. The SDK
-default is `thinking_budget=-1`, meaning dynamic and effectively unbounded. Fifteen
-requests per configuration, identical brand-recommendation prompts, concurrency 3:
+default is `thinking_budget=-1`, meaning dynamic and effectively unbounded.
 
-| `thinking_budget` | usable | throughput | p50 | p99 | billed output | thinking | cost |
-|---|---|---|---|---|---|---|---|
-| `0` (off) | **15/15** | 2.87 rps | **977 ms** | **1,507 ms** | 1,195 | 0 | **$0.0032** |
-| `-1` (default) | **14/15** | 0.71 rps | 2,862 ms | 5,857 ms | 7,997 | 6,682 | $0.0202 |
+| Tier | `thinking_budget` | usable | rps | p50 | p99 | out tok/req | thinking | $/req |
+|---|---|---|---|---|---|---|---|---|
+| **Vertex** | `0` (off) | **15/15** | 1.79 | **1,329 ms** | **2,616 ms** | 108.9 | 0 | **0.000283** |
+| **Vertex** | `-1` (default) | 15/15 | 0.70 | 3,339 ms | 5,991 ms | 460.6 | 368.5 | 0.001162 |
+| Developer | `0` (off) | 15/15 | 2.87 | 976 ms | 1,507 ms | 79.7 | 0 | 0.000210 |
+| Developer | `-1` (default) | 14/15 | 0.70 | 2,862 ms | 5,856 ms | 571.2 | 477.3 | 0.001440 |
 
-Turning thinking off on this workload gave **6.3x lower cost, 2.9x better p50, 3.9x
-better p99, and 4.1x the throughput** — and it eliminated the one unusable response.
+**On Vertex, turning thinking off gave 4.1x lower cost and 2.5x better p50.** Thinking
+was **80.0% of billed output tokens** — tokens that bill at the output rate and produce
+no text anyone reads.
+
+### Correcting an earlier claim
+
+An earlier version of this document reported **6.3x**, measured on the Developer API
+alone. On Vertex the same experiment gives **4.1x**. Both are real; the ratio is not a
+constant of the model. The Developer API happened to produce longer thinking traces
+(477 vs 369 tokens per request) and shorter answers (80 vs 109 visible tokens), which
+widens the gap.
+
+The direction and the order of magnitude hold on both tiers. The precise multiplier
+does not, and quoting a single figure without naming the tier would have been wrong.
+This is exactly the transferability caveat from §0 turning out to matter in practice.
 
 **83.6% of billed output tokens were thinking** (6,682 of 7,997). Those tokens bill at
 the output rate and produce no text the user ever sees. On a single-request probe the
@@ -248,16 +266,23 @@ latency and 6x the bill. A workload that genuinely needs reasoning should enable
 deliberately **and** raise `max_output_tokens` well above the thinking budget, because
 the two share one allowance.
 
-### Caveat on transferability
+### Vertex is slower than the Developer API
 
-These numbers come from the **Gemini Developer API**, not Vertex: a different quota
-pool, a different endpoint, and free-tier rate limits. The absolute throughput and
-latency figures are **not** Vertex capacity numbers and should not be read as such.
+Same model, same prompts, same configuration, different serving tier:
 
-What should transfer is the *relative* effect, because it is a property of the model
-and its billing rather than of the serving tier: thinking tokens bill at the output
-rate, they share the output allowance, and the default is unbounded. Confirming the
-ratio on Vertex is experiment 5 in the matrix and is ready to run.
+| Config | Developer p50 | Vertex p50 | Developer p99 | Vertex p99 |
+|---|---|---|---|---|
+| thinking off | 976 ms | 1,329 ms (**1.36x**) | 1,507 ms | 2,616 ms (**1.74x**) |
+| dynamic thinking | 2,862 ms | 3,339 ms (1.17x) | 5,856 ms | 5,991 ms (1.02x) |
+
+Vertex was consistently slower, and the tail was worse: **1.74x on p99 with thinking
+off**. This is the clearest justification for the §0 warning that capacity numbers do
+not transfer between tiers. Any benchmark that measured the Developer API and reported
+it as "Gemini performance" would overstate what a Vertex deployment actually delivers,
+and would understate the tail by more than half.
+
+Sample sizes are 15 per cell, so treat the ratios as indicative rather than precise.
+The direction was consistent across every cell measured.
 
 ## 5. The SDK serializes one field in snake_case *(validated)*
 
@@ -508,50 +533,51 @@ Adaptive limiting is **off by default** (`GEMINI_ADAPTIVE=true` to enable), beca
 fixed limit is easier to reason about and the case for switching should be made with
 measurements from the real backend rather than assumed.
 
-## 6c. Cost at the stated workload: a 14x spread *(modelled on measured tokens)*
+## 6c. Cost at the stated workload: an 8.4x spread *(measured tokens, Vertex)*
 
-Given batch semantics and thousands of prompts per day, the levers that matter are the
-ones that reduce cost per request. Token counts here are measured from the live runs in
-`results/real/`, not estimated: 37.3 input / 79.7 output with thinking off, and
-39.9 / 571.2 with dynamic thinking.
+Given batch semantics and thousands of prompts per day, the levers that matter reduce
+cost per request. Token counts are measured on **Vertex** from `results/real/`:
+35.3 input / 108.9 output with thinking off, and 35.3 / 460.6 with dynamic thinking.
 
 | Configuration | $/request | vs naive |
 |---|---|---|
-| interactive, dynamic thinking (the defaults) | 0.00143997 | 1.0x |
-| thinking off | 0.00021044 | 6.8x |
-| thinking off + context caching | 0.00020369 | 7.1x |
-| thinking off + Batch API | 0.00010522 | 13.7x |
-| **thinking off + Batch + caching** | **0.00010222** | **14.1x** |
+| interactive, dynamic thinking (the defaults) | 0.00116209 | 1.0x |
+| thinking off | 0.00028242 | 4.1x |
+| thinking off + context caching | 0.00027567 | 4.2x |
+| thinking off + Batch API | 0.00014121 | 8.2x |
+| **thinking off + Batch + caching** | **0.00013821** | **8.4x** |
 
-At 50,000 prompts/day that is **$26,279/year against $1,866/year** — the same work,
-the same model, for 7% of the bill.
+At 50,000 prompts/day that is **$21,208/year against $2,522/year** — the same work,
+the same model, for 12% of the bill.
 
 Three levers, in order of size:
 
-**Thinking off (6.8x).** Measured, not modelled: §4 has the live comparison. Output
-tokens are ~7x the price of input and, with dynamic thinking, ~14x the volume, so this
-is where nearly all the money is.
+**Thinking off (4.1x).** Measured on Vertex, §4. Output tokens are ~8x the price of
+input and, with dynamic thinking, ~4x the volume, so this is where the money is.
 
 **Batch API (2x).** Vertex bills batch prediction at roughly half the interactive rate
 in exchange for asynchronous, up-to-24-hour turnaround. A daily brand sweep does not
-care about turnaround. This is the single clearest win available and it is unavailable
-to an interactive workload — which is exactly why the batch/interactive question was
-worth asking before optimizing anything.
+care about turnaround. This is the clearest remaining win and it is unavailable to an
+interactive workload — which is why the batch/interactive question was worth asking
+before optimizing anything.
 
-**Context caching (~1.05x here).** Every request in a sweep carries the same system
+**Context caching (~1.02x here).** Every request in a sweep carries the same system
 prompt, and cache hits bill input at a fraction of the normal rate. The effect is small
-because this workload's inputs are tiny — about 37 tokens. It would matter a great deal
-more if the system prompt grew, for example by including brand lists or few-shot
-examples, which is a plausible direction. Worth noting that implicit caching is on by
-default for Gemini 2.5, so this discount may already be arriving unrequested; the
-provider now reads `cached_content_token_count` so the cost model reflects it rather
-than overstating spend.
+because inputs are tiny — about 35 tokens. It would matter considerably more if the
+system prompt grew to include brand lists or few-shot examples, which is a plausible
+direction. Implicit caching is on by default for Gemini 2.5, so the discount may
+already be arriving unrequested; the provider reads `cached_content_token_count` so
+the model reflects it rather than overstating spend.
 
 Reproduce with `python scripts/cost_model.py --daily 50000`.
 
 **What this does not model:** batch pricing is quoted from Google's published rates
-rather than measured, since that needs a Vertex project. The relative ordering is
-robust; the absolute figures should be confirmed against a real invoice.
+rather than measured. The relative ordering is robust; the absolute figures should be
+confirmed against a real invoice.
+
+**Earlier figure corrected.** A previous version reported 14.1x, built on Developer
+API token counts. On Vertex the spread is 8.4x, because Vertex produced longer answers
+and shorter thinking traces. Same conclusion, smaller multiplier.
 
 ## 6d. Where the service actually saturates *(validated)*
 

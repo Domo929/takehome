@@ -5,7 +5,7 @@ PY := .venv/bin/python
 K6 := k6
 export PYTHONPATH := .
 
-.PHONY: help venv preflight test calibrate auth-check service-up service-down overhead capacity run runs adaptive-demo cost-model mock-up mock-down obs-up obs-down obs-logs \
+.PHONY: help venv vertex-check preflight test calibrate auth-check service-up service-down overhead capacity run runs adaptive-demo cost-model mock-up mock-down obs-up obs-down obs-logs \
         k6-smoke k6-ramp k6-constant sweep-mock pool-experiment clean
 
 help:
@@ -16,6 +16,9 @@ venv: ## Create the venv and install dependencies
 	python3 -m venv .venv
 	$(PY) -m pip install --upgrade pip
 	$(PY) -m pip install -r requirements.txt
+
+vertex-check: ## Verify Vertex access step by step before spending anything
+	@bash scripts/check_vertex.sh
 
 preflight: ## Validate credentials + cost with ONE real request
 	$(PY) -m harness.preflight $(ARGS)

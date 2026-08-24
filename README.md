@@ -39,15 +39,15 @@ Grafana at http://localhost:3000, *Takehome* folder.
 
 **The workload is batch at thousands of prompts/day, so cost is the problem, not
 scale.** A 50,000-prompt day completes in 3.3 minutes at the measured ~250 rps. Moving
-to thinking-off + Batch API + context caching is a **14.1x cost reduction** —
-$26,279/year to $1,866/year at that volume, modelled on measured token counts. See
-FINDINGS §0b and §6c.
+to thinking-off + Batch API + context caching is an **8.4x cost reduction** —
+$21,208/year to $2,522/year at that volume, on tokens measured against real Vertex.
+See FINDINGS §0b and §6c.
 
 **Two endpoints, one provider.** Gemini is served by both the Gemini Developer API
 (API key, fixed published quota) and Vertex AI (GCP project, Dynamic Shared Quota).
-`GEMINI_BACKEND` selects. All live measurements so far used the Developer API; Vertex
-is the target and needs credentials. Model behaviour transfers between them, capacity
-numbers do not. See FINDINGS §0.
+`GEMINI_BACKEND` selects. Both have now been measured against
+(`evertune-tests` for Vertex). Model behaviour transfers between them; capacity and
+latency numbers do not. See FINDINGS §0.
 
 **Concurrency adapts to available capacity.** `parallelism()` as a constant assumes a
 ceiling you can discover once; Dynamic Shared Quota moves. The controller keys on
@@ -75,11 +75,12 @@ FINDINGS §1.
 against a service answering in 500 ms, the client reports 4.2 s and caps at 15.4 rps.
 The vendor response gives no hint. Instrumented as `llm_pool_saturation_ratio`.
 
-**Dynamic thinking costs 6.3x more, and it is the SDK default.** Measured on real
-Gemini, n=15 per config: turning `thinking_budget` off gave 6.3x lower cost, 2.9x
-better p50, and 4.1x the throughput, for a substantively identical answer. 83.6% of
-billed output tokens were invisible reasoning. Default here is `0`, opt-in only.
-See FINDINGS §4.
+**Dynamic thinking costs 4.1x more on Vertex, and it is the SDK default.** Measured
+against `evertune-tests`, n=15 per config: turning `thinking_budget` off gave 4.1x
+lower cost and 2.5x better p50, with 80% of billed output tokens being invisible
+reasoning. Vertex is also 1.36x slower at p50 and 1.74x at p99 than the Developer API
+on identical requests, which is why capacity numbers must name their tier. Default
+here is `0`, opt-in only. See FINDINGS §4.
 
 ## Cost safety
 
