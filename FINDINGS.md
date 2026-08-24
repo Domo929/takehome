@@ -53,6 +53,39 @@ this key's ceiling is unknown, and no throughput claim in this document rests on
 
 ---
 
+## 0b. Workload assumptions
+
+These came from Evertune rather than from me, and they change the conclusions
+materially. Recording them explicitly because every number below is conditional on
+them, and a reader who assumes a different workload should discount accordingly.
+
+| | Stated | Consequence |
+|---|---|---|
+| Shape | **Batch**, not interactive | Turnaround of hours is acceptable, which unlocks the Batch API |
+| Volume | 100+ prompts per company per day, **thousands per day total** | Throughput is not a constraint. See below. |
+| Consumer of `answer` | **An LLM parser**, not a human or a regex | Truncation is dangerous, and structured output is likely the better interface |
+| Unknown | Whether logprobs are load-bearing; duplicate tolerance; 2.5 Flash migration plan | Open questions, listed in §8 |
+
+### Throughput is not the problem
+
+Our service sustains ~250 rps. Against the stated volume:
+
+| Daily volume | Averaged over 24h | Whole day's work completes in |
+|---|---|---|
+| 5,000 | 0.06 rps | **22 seconds** |
+| 50,000 | 0.58 rps | **3.3 minutes** |
+| 500,000 | 5.8 rps | **33 minutes** |
+
+Even at 100x the stated volume, a single process finishes the daily sweep in about
+half an hour. **The engineering problem here is cost, not scale.** That reframes the
+whole exercise, and the sections below are ordered accordingly.
+
+It also means the load testing in this repo is best read as *headroom
+characterization* — establishing that capacity is a non-issue and finding where it
+would eventually bite — rather than as capacity planning against a real ceiling.
+
+---
+
 ## 1. The model retires in seven weeks
 
 Gemini 2.5 Flash on Vertex is scheduled for retirement on **2026-10-16**, confirmed
@@ -475,6 +508,82 @@ Adaptive limiting is **off by default** (`GEMINI_ADAPTIVE=true` to enable), beca
 fixed limit is easier to reason about and the case for switching should be made with
 measurements from the real backend rather than assumed.
 
+## 6c. Cost at the stated workload: a 14x spread *(modelled on measured tokens)*
+
+Given batch semantics and thousands of prompts per day, the levers that matter are the
+ones that reduce cost per request. Token counts here are measured from the live runs in
+`results/real/`, not estimated: 37.3 input / 79.7 output with thinking off, and
+39.9 / 571.2 with dynamic thinking.
+
+| Configuration | $/request | vs naive |
+|---|---|---|
+| interactive, dynamic thinking (the defaults) | 0.00143997 | 1.0x |
+| thinking off | 0.00021044 | 6.8x |
+| thinking off + context caching | 0.00020369 | 7.1x |
+| thinking off + Batch API | 0.00010522 | 13.7x |
+| **thinking off + Batch + caching** | **0.00010222** | **14.1x** |
+
+At 50,000 prompts/day that is **$26,279/year against $1,866/year** — the same work,
+the same model, for 7% of the bill.
+
+Three levers, in order of size:
+
+**Thinking off (6.8x).** Measured, not modelled: §4 has the live comparison. Output
+tokens are ~7x the price of input and, with dynamic thinking, ~14x the volume, so this
+is where nearly all the money is.
+
+**Batch API (2x).** Vertex bills batch prediction at roughly half the interactive rate
+in exchange for asynchronous, up-to-24-hour turnaround. A daily brand sweep does not
+care about turnaround. This is the single clearest win available and it is unavailable
+to an interactive workload — which is exactly why the batch/interactive question was
+worth asking before optimizing anything.
+
+**Context caching (~1.05x here).** Every request in a sweep carries the same system
+prompt, and cache hits bill input at a fraction of the normal rate. The effect is small
+because this workload's inputs are tiny — about 37 tokens. It would matter a great deal
+more if the system prompt grew, for example by including brand lists or few-shot
+examples, which is a plausible direction. Worth noting that implicit caching is on by
+default for Gemini 2.5, so this discount may already be arriving unrequested; the
+provider now reads `cached_content_token_count` so the cost model reflects it rather
+than overstating spend.
+
+Reproduce with `python scripts/cost_model.py --daily 50000`.
+
+**What this does not model:** batch pricing is quoted from Google's published rates
+rather than measured, since that needs a Vertex project. The relative ordering is
+robust; the absolute figures should be confirmed against a real invoice.
+
+## 6d. Where the service actually saturates *(validated)*
+
+Even though throughput is not the binding constraint, it is worth knowing where the
+ceiling is. Backend latency was pinned low so the ceiling would be *our process*
+rather than the vendor, capacity raised to 600 and the pool to 800:
+
+| Offered | Served | Shed | p50 | p99 | Verdict |
+|---|---|---|---|---|---|
+| 100 rps | 99 | 0 | 57 ms | 316 ms | clean |
+| 250 rps | **250** | 0 | 57 ms | 431 ms | **clean, at the knee** |
+| 500 rps | 205 | 295 | 66 ms | 9,811 ms | saturated |
+| 1,000 rps | 279 | 721 | 17 ms | 7,516 ms | saturated |
+| 1,500 rps | 155 | 1,345 | 40 ms | 9,969 ms | collapsing |
+
+**A single Python worker serves ~250 rps cleanly**, then degrades: at 1,500 offered it
+manages 155 rps, *less* than at 250. Pushing harder makes it slower.
+
+The instrumentation identifies the culprit unambiguously:
+
+- **event loop lag peaked at 179.9 ms** — the process cannot schedule work fast enough
+- **pool saturation only reached 75%** — the connection pool is *not* the constraint
+- **our per-request overhead stayed at 0.5 ms p99** — the code path is not slow
+
+So the ceiling is the interpreter, not the client design: one event loop, one GIL. The
+scaling path is more worker processes, at the cost of one connection pool each and
+therefore a per-worker rather than global concurrency limit.
+
+For the stated workload this is academic — 250 rps is roughly 400x the average demand
+of a 50,000-prompt day. It is included because "we measured where it breaks and why"
+is a different claim from "we never got near the limit".
+
 ## 7. Cost control *(validated)*
 
 Confirmed rates: **$0.30 / 1M input, $2.50 / 1M output**, thinking billed at the
@@ -519,15 +628,31 @@ cross it would show whether it matters.
 truncated answers. For mention counting I believe a fragment is worse than a failure,
 but that is a product decision and it belongs to whoever owns the downstream counts.
 
-**Open questions I would want answered:**
+**Answered since (see §0b):** the workload is batch, at thousands of prompts per day,
+and the consumer of `answer` is an LLM parser. Those answers drive §6c and the
+structured-output recommendation below.
 
-1. Are logprobs load-bearing? `together.py` requests `logprobs=1` and never reads the
-   result. Vertex supports `response_logprobs`/`logprobs` with quota caveats. If
-   mention confidence matters, that changes the provider surface.
-2. What is the real traffic shape — sustained batch, or bursty on-demand? It decides
-   whether to optimize for the closed-loop or open-loop number.
-3. Is the 2.5 Flash retirement already planned for, or should this target Gemini 3
-   Flash directly?
+**Still open:**
+
+1. **Are logprobs load-bearing?** `together.py` requests `logprobs=1` and never reads
+   the result. If mention confidence matters downstream, that changes the provider
+   surface, and Vertex's logprobs support carries quota caveats.
+2. **Does a duplicate answer cause harm?** We retry on 429 and 5xx. If a retry lands
+   after the original in fact succeeded, does double-counting a brand mention corrupt
+   the output? That decides whether idempotency keys are needed.
+3. **Is the 2.5 Flash retirement planned for**, or should this target Gemini 3 Flash
+   directly? Seven weeks is short for a migration nobody has scheduled.
+4. **Confirm batch pricing against a real invoice.** §6c uses Google's published
+   rates; the relative ordering is robust but the absolute figures are unverified.
+
+**Because the consumer is an LLM parser, structured output deserves a look.** Gemini
+supports `responseSchema` for guaranteed-shape JSON. If a second model is currently
+being paid to turn prose into structured brand mentions, having Gemini emit the
+structure directly removes that call entirely — a larger saving than any of the
+tuning in §6c, and it also makes truncation detectable as malformed JSON rather than
+as a plausible-looking short list. I did not build this because it changes the
+response contract and that is a product decision, but it is the first thing I would
+prototype.
 
 ---
 

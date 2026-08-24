@@ -37,6 +37,12 @@ Grafana at http://localhost:3000, *Takehome* folder.
 
 ## Three things worth knowing
 
+**The workload is batch at thousands of prompts/day, so cost is the problem, not
+scale.** A 50,000-prompt day completes in 3.3 minutes at the measured ~250 rps. Moving
+to thinking-off + Batch API + context caching is a **14.1x cost reduction** —
+$26,279/year to $1,866/year at that volume, modelled on measured token counts. See
+FINDINGS §0b and §6c.
+
 **Two endpoints, one provider.** Gemini is served by both the Gemini Developer API
 (API key, fixed published quota) and Vertex AI (GCP project, Dynamic Shared Quota).
 `GEMINI_BACKEND` selects. All live measurements so far used the Developer API; Vertex
