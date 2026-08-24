@@ -5,7 +5,7 @@ PY := .venv/bin/python
 K6 := k6
 export PYTHONPATH := .
 
-.PHONY: help venv preflight test mock-up mock-down obs-up obs-down obs-logs \
+.PHONY: help venv preflight test calibrate auth-check mock-up mock-down obs-up obs-down obs-logs \
         k6-smoke k6-ramp k6-constant sweep-mock pool-experiment clean
 
 help:
@@ -62,6 +62,19 @@ pool-experiment: ## Show the connection pool is the throughput ceiling
 
 K6_PROM := K6_PROMETHEUS_RW_SERVER_URL=http://localhost:9090/api/v1/write \
            K6_FEATURES=native-histograms
+
+calibrate: ## Measure the test rig's own ceiling (must be >> any real experiment)
+	@curl -s -X POST http://127.0.0.1:8088/__configure -H 'Content-Type: application/json' \
+		-d '{"base_latency_s":0,"per_output_token_s":0,"knee_concurrency":1000000,"saturation_concurrency":1000000}' >/dev/null
+	@curl -s -X POST http://127.0.0.1:8088/__reset >/dev/null
+	TARGET=mock SCENARIO=calibrate $(K6) run --quiet loadtest/k6/gemini.js
+
+auth-check: ## Prove token fetches are O(VUs), not O(requests)
+	@curl -s -X POST http://127.0.0.1:8088/__reset >/dev/null
+	TARGET=mock AUTH=sidecar SCENARIO=constant RATE=200 DURATION=30s MAX_VUS=300 \
+		$(K6) run --quiet loadtest/k6/gemini.js
+	@echo "token fetches should equal VU count, not request count:"
+	@curl -s http://127.0.0.1:8099/__stats
 
 k6-smoke: ## k6 smoke test against the mock
 	TARGET=mock SCENARIO=smoke $(K6) run --quiet loadtest/k6/gemini.js

@@ -154,6 +154,59 @@ The service was answering in a flat 500 ms throughout. At pool=8 the client repo
 vendor's response indicates it — which is why `llm_pool_saturation_ratio` is a
 first-class metric rather than a debug print.
 
+## Rig calibration: proving the harness is not the bottleneck
+
+Any added component between the generator and the vendor can silently become the
+constraint, and then the numbers describe the rig rather than Gemini. Three things sit
+in that path, and each is measured rather than assumed.
+
+**What is actually in the path.** Against real Vertex, the mock is not involved at
+all — k6 and the Python client both talk to Google directly. The only added component
+is the token sidecar, and Prometheus sits off to the side receiving metrics.
+
+**1. The mock endpoint (mock-mode only).** With latency forced to zero, `make
+calibrate` ramps until the rig gives out:
+
+| Offered | Achieved | Dropped | p99 |
+|---|---|---|---|
+| 4,000 rps | 3,999 (100%) | 0 | 73 ms |
+| 8,000 rps | 4,646 (58%) | 31,080 | 686 ms |
+| 16,000 rps | 4,748 (30%) | 110,548 | 713 ms |
+
+The rig is clean to 4,000 rps and saturates near 4,700. Real Gemini answers in roughly
+1 second, so a client holding 100 requests in flight offers about 100 rps — **more
+than 40x below the rig ceiling**. Mock-mode experiments must stay well under 4,000 rps
+or the mock, not the model, is what is being measured.
+
+**2. The token sidecar (in the path for real Vertex).** Each k6 VU caches its token
+for the token's lifetime, so fetches scale with VU count, not request count. Verified
+with `make auth-check` by holding VUs constant and lengthening the run:
+
+| Run | Requests | Token fetches | Share |
+|---|---|---|---|
+| 10 s | 2,001 | 300 | 15.0 % |
+| 60 s | 12,001 | **300** | 2.5 % |
+
+Identical fetch count across a 6x longer run. Extrapolated to a 20-minute soak at 200
+rps that is ~300 fetches against 240,000 requests, or 0.13 %. The fetches all land at
+VU startup, which is a deliberate thundering herd — the sidecar serializes them behind
+a lock so N VUs produce one upstream refresh.
+
+**3. Prometheus remote write.** k6 batches metric export off the request path. Same
+scenario with and without `--out experimental-prometheus-rw`:
+
+| | Achieved | p50 | p99 |
+|---|---|---|---|
+| off | 995.8 rps | 50.89 ms | 64.21 ms |
+| on | 996.3 rps | 50.97 ms | 64.92 ms |
+
+Within noise.
+
+**The standing guard.** `dropped_iterations` is a k6 threshold, so any run where the
+generator could not keep up **exits non-zero**. That is the automated check that a
+result was not silently rig-bound. On the Python side the equivalent signals are
+`llm_pool_saturation_ratio` and `llm_event_loop_lag_seconds`.
+
 ## Troubleshooting
 
 **k6 reports `dropped_iterations > 0.`** The generator could not sustain the offered

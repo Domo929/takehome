@@ -24,7 +24,7 @@ import http from 'k6/http';
 import { check } from 'k6';
 import { Counter, Rate, Trend } from 'k6/metrics';
 import { scenarios, thresholds } from './scenarios.js';
-import { authHeaders, endpointUrl, modelId } from './lib/auth.js';
+import { authHeaders, authMode, endpointUrl, modelId } from './lib/auth.js';
 
 export const options = {
   scenarios,
@@ -214,6 +214,9 @@ export function handleSummary(data) {
     // If k6 dropped iterations it could not sustain the offered rate, which makes the
     // generator the bottleneck and every other number here suspect.
     dropped_iterations: metricCount('dropped_iterations'),
+    auth_mode: authMode(),
+    // Must be ~= number of VUs, never ~= number of requests.
+    token_refreshes: metricCount('http_reqs{name:token-refresh}'),
     latency_ms: {
       p50: trendValue('http_req_duration', 'med'),
       p90: trendValue('http_req_duration', 'p(90)'),

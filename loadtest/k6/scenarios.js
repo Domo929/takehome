@@ -83,6 +83,25 @@ const ALL = {
     preAllocatedVUs: Math.min(MAX_VUS, Math.max(20, RATE * 12)),
     maxVUs: MAX_VUS,
   },
+
+  // Rig calibration, not a Gemini test. Ramps hard against a zero-latency mock to
+  // find the ceiling of the *test rig itself* (mock server, loopback, k6). Any real
+  // experiment must run far below whatever knee this finds, otherwise the harness is
+  // measuring its own limits and attributing them to the vendor.
+  calibrate: {
+    executor: 'ramping-arrival-rate',
+    startRate: 100,
+    timeUnit: '1s',
+    preAllocatedVUs: 600,
+    maxVUs: 2000,
+    stages: [
+      { target: 250, duration: '10s' },
+      { target: 500, duration: '10s' },
+      { target: 1000, duration: '10s' },
+      { target: 2000, duration: '10s' },
+      { target: 4000, duration: '10s' },
+    ],
+  },
 };
 
 if (!ALL[SCENARIO]) {
