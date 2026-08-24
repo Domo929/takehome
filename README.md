@@ -39,8 +39,9 @@ Grafana at http://localhost:3000, *Takehome* folder.
 
 **The workload is batch at thousands of prompts/day, so cost is the problem, not
 scale.** A 50,000-prompt day completes in 3.3 minutes at the measured ~250 rps. Moving
-to thinking-off + Batch API + context caching is an **8.4x cost reduction** —
-$21,208/year to $2,522/year at that volume, on tokens measured against real Vertex.
+to thinking-off + Batch API + context caching is an **8.2x cost reduction** —
+$21,103/year to $2,576/year at that volume, on tokens measured against Vertex
+us-central1.
 See FINDINGS §0b and §6c.
 
 **Two endpoints, one provider.** Gemini is served by both the Gemini Developer API
@@ -75,11 +76,11 @@ FINDINGS §1.
 against a service answering in 500 ms, the client reports 4.2 s and caps at 15.4 rps.
 The vendor response gives no hint. Instrumented as `llm_pool_saturation_ratio`.
 
-**Dynamic thinking costs 4.1x more on Vertex, and it is the SDK default.** Measured
-against `evertune-tests`, n=15 per config: turning `thinking_budget` off gave 4.1x
-lower cost and 2.5x better p50, with 80% of billed output tokens being invisible
-reasoning. Vertex is also 1.36x slower at p50 and 1.74x at p99 than the Developer API
-on identical requests, which is why capacity numbers must name their tier. Default
+**Dynamic thinking costs 4.0x more, and it is the SDK default.** Measured against
+`evertune-tests` in us-central1, n=15 per config: turning `thinking_budget` off gave
+4.0x lower cost and 2.8x better p50, with 80% of billed output tokens being invisible
+reasoning. The ratio holds across regions and tiers; the latency does not — the same
+request ranges from 976 ms to 4,106 ms depending on tier and region alone. Default
 here is `0`, opt-in only. See FINDINGS §4.
 
 ## Cost safety

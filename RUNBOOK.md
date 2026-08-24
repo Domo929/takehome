@@ -142,7 +142,7 @@ evidence for Vertex.
 gcloud auth application-default login
 export GEMINI_BACKEND=vertex
 export GOOGLE_CLOUD_PROJECT=<project>
-export GOOGLE_CLOUD_LOCATION=global
+export GOOGLE_CLOUD_LOCATION=us-central1
 unset GEMINI_BASE_URL          # or it keeps talking to the mock
 
 .venv/bin/python -m harness.run --mode closed --concurrency 8 \
@@ -181,6 +181,7 @@ TARGET=vertex GOOGLE_CLOUD_PROJECT=<project> SCENARIO=constant RATE=5 DURATION=6
 | `GEMINI_ATTEMPT_TIMEOUT_S` | `60` | per attempt |
 | `GEMINI_TOTAL_DEADLINE_S` | `180` | across all retries |
 | `GEMINI_BASE_URL` | unset | set to redirect at the mock |
+| `GOOGLE_CLOUD_LOCATION` | `us-central1` | region selects a distinct quota pool |
 
 The fake endpoint is tunable at runtime, so one server can drive many scenarios:
 

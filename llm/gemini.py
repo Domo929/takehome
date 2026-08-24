@@ -178,7 +178,11 @@ class Gemini(LLM):
 
         if self._backend == "vertex":
             resolved_project = project or os.getenv("GOOGLE_CLOUD_PROJECT")
-            resolved_location = location or os.getenv("GOOGLE_CLOUD_LOCATION", "global")
+            # us-central1 rather than "global": Evertune runs there, and region is
+            # not a cosmetic setting. It selects a distinct quota pool and a distinct
+            # set of serving capacity, so latency and throughput measured in one
+            # region do not transfer to another.
+            resolved_location = location or os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
             if not resolved_project:
                 raise ValueError(
                     "Vertex backend requires a project: set GOOGLE_CLOUD_PROJECT or pass project=."

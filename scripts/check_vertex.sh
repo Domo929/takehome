@@ -8,7 +8,7 @@ set -uo pipefail
 
 GCLOUD="${GCLOUD:-$HOME/google-cloud-sdk/bin/gcloud}"
 PROJECT="${GOOGLE_CLOUD_PROJECT:-}"
-LOCATION="${GOOGLE_CLOUD_LOCATION:-global}"
+LOCATION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
 MODEL="${GEMINI_MODEL:-gemini-2.5-flash}"
 
 pass() { printf '  \033[32mOK\033[0m    %s\n' "$1"; }

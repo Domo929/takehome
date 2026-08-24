@@ -204,20 +204,23 @@ default is `thinking_budget=-1`, meaning dynamic and effectively unbounded.
 
 | Tier | `thinking_budget` | usable | rps | p50 | p99 | out tok/req | thinking | $/req |
 |---|---|---|---|---|---|---|---|---|
-| **Vertex** | `0` (off) | **15/15** | 1.79 | **1,329 ms** | **2,616 ms** | 108.9 | 0 | **0.000283** |
-| **Vertex** | `-1` (default) | 15/15 | 0.70 | 3,339 ms | 5,991 ms | 460.6 | 368.5 | 0.001162 |
+| **Vertex us-central1** | `0` (off) | **15/15** | 1.03 | **1,471 ms** | 9,189 ms | 111.1 | 0 | **0.000288** |
+| **Vertex us-central1** | `-1` (default) | 15/15 | 0.64 | 4,106 ms | 7,852 ms | 458.3 | 368.6 | 0.001156 |
+| Vertex global | `0` (off) | 15/15 | 1.79 | 1,329 ms | 2,616 ms | 108.9 | 0 | 0.000283 |
+| Vertex global | `-1` (default) | 15/15 | 0.70 | 3,339 ms | 5,991 ms | 460.6 | 368.5 | 0.001162 |
 | Developer | `0` (off) | 15/15 | 2.87 | 976 ms | 1,507 ms | 79.7 | 0 | 0.000210 |
 | Developer | `-1` (default) | 14/15 | 0.70 | 2,862 ms | 5,856 ms | 571.2 | 477.3 | 0.001440 |
 
-**On Vertex, turning thinking off gave 4.1x lower cost and 2.5x better p50.** Thinking
-was **80.0% of billed output tokens** — tokens that bill at the output rate and produce
-no text anyone reads.
+**In us-central1, turning thinking off gave 4.0x lower cost and 2.8x better p50.**
+Thinking was **80.4% of billed output tokens** — tokens that bill at the output rate
+and produce no text anyone reads. The ratio is stable across regions (4.1x in
+`global`), which is what makes it a usable planning number.
 
 ### Correcting an earlier claim
 
 An earlier version of this document reported **6.3x**, measured on the Developer API
-alone. On Vertex the same experiment gives **4.1x**. Both are real; the ratio is not a
-constant of the model. The Developer API happened to produce longer thinking traces
+alone. On Vertex the same experiment gives **4.0-4.1x**. Both are real; the ratio is
+not a constant of the model. The Developer API happened to produce longer thinking traces
 (477 vs 369 tokens per request) and shorter answers (80 vs 109 visible tokens), which
 widens the gap.
 
@@ -266,23 +269,43 @@ latency and 6x the bill. A workload that genuinely needs reasoning should enable
 deliberately **and** raise `max_output_tokens` well above the thinking budget, because
 the two share one allowance.
 
-### Vertex is slower than the Developer API
+### Region and tier both change the latency, but not the economics
 
-Same model, same prompts, same configuration, different serving tier:
+Evertune runs in **us-central1**, so that is now the provider default. `global` was
+used for the first Vertex measurements, which prompted a re-run to check whether the
+choice mattered. It does, but not where it counts.
 
-| Config | Developer p50 | Vertex p50 | Developer p99 | Vertex p99 |
-|---|---|---|---|---|
-| thinking off | 976 ms | 1,329 ms (**1.36x**) | 1,507 ms | 2,616 ms (**1.74x**) |
-| dynamic thinking | 2,862 ms | 3,339 ms (1.17x) | 5,856 ms | 5,991 ms (1.02x) |
+Same project, same prompts, same configuration:
 
-Vertex was consistently slower, and the tail was worse: **1.74x on p99 with thinking
-off**. This is the clearest justification for the §0 warning that capacity numbers do
-not transfer between tiers. Any benchmark that measured the Developer API and reported
-it as "Gemini performance" would overstate what a Vertex deployment actually delivers,
-and would understate the tail by more than half.
+| Config | Region / tier | p50 | rps | out tok/req | $/req |
+|---|---|---|---|---|---|
+| thinking off | Developer API | 976 ms | 2.87 | 79.7 | 0.000210 |
+| thinking off | Vertex `global` | 1,329 ms | 1.79 | 108.9 | 0.000283 |
+| thinking off | **Vertex `us-central1`** | **1,471 ms** | **1.03** | **111.1** | **0.000288** |
+| dynamic thinking | Vertex `global` | 3,339 ms | 0.70 | 460.6 | 0.001162 |
+| dynamic thinking | **Vertex `us-central1`** | **4,106 ms** | **0.64** | **458.3** | **0.001156** |
 
-Sample sizes are 15 per cell, so treat the ratios as indicative rather than precise.
-The direction was consistent across every cell measured.
+Two conclusions, with different confidence levels.
+
+**Cost is portable; latency is not.** Per-request cost differs by at most 2% across
+regions, because token counts barely move (111.1 vs 108.9 output tokens). The
+thinking-budget ratio is 4.0x in us-central1 against 4.1x in global. So the economic
+findings in §6c transfer, which is the more useful half.
+
+Latency does not transfer. us-central1 was 1.11x slower at p50 with thinking off and
+1.23x slower with it on, and sustained throughput was **0.58x** — meaningfully worse
+for the same offered concurrency. Combined with the Developer API being faster still,
+the same request has a p50 ranging from 976 ms to 4,106 ms depending purely on which
+tier and region it lands in.
+
+**A caution on the tails.** The p99 figures at n=15 are effectively "the slowest of
+fifteen requests", which is not a p99 in any meaningful sense. One us-central1 cell
+showed a 3.51x p99 ratio; I do not believe that number and would not report it as a
+finding. Characterizing tails properly needs hundreds of samples per cell, which is
+listed in §9 rather than claimed here.
+
+The practical consequence is simply that **any latency figure must name its tier and
+region**, and a benchmark that omits them is not comparable to one that does.
 
 ## 5. The SDK serializes one field in snake_case *(validated)*
 
@@ -533,26 +556,27 @@ Adaptive limiting is **off by default** (`GEMINI_ADAPTIVE=true` to enable), beca
 fixed limit is easier to reason about and the case for switching should be made with
 measurements from the real backend rather than assumed.
 
-## 6c. Cost at the stated workload: an 8.4x spread *(measured tokens, Vertex)*
+## 6c. Cost at the stated workload: an 8.2x spread *(measured tokens, us-central1)*
 
 Given batch semantics and thousands of prompts per day, the levers that matter reduce
-cost per request. Token counts are measured on **Vertex** from `results/real/`:
-35.3 input / 108.9 output with thinking off, and 35.3 / 460.6 with dynamic thinking.
+cost per request. Token counts are measured on **Vertex us-central1** from
+`results/real/`: 35.3 input / 111.1 output with thinking off, and 35.3 / 458.3 with
+dynamic thinking.
 
 | Configuration | $/request | vs naive |
 |---|---|---|
-| interactive, dynamic thinking (the defaults) | 0.00116209 | 1.0x |
-| thinking off | 0.00028242 | 4.1x |
-| thinking off + context caching | 0.00027567 | 4.2x |
-| thinking off + Batch API | 0.00014121 | 8.2x |
-| **thinking off + Batch + caching** | **0.00013821** | **8.4x** |
+| interactive, dynamic thinking (the defaults) | 0.00115634 | 1.0x |
+| thinking off | 0.00028834 | 4.0x |
+| thinking off + context caching | 0.00028159 | 4.1x |
+| thinking off + Batch API | 0.00014417 | 8.0x |
+| **thinking off + Batch + caching** | **0.00014117** | **8.2x** |
 
-At 50,000 prompts/day that is **$21,208/year against $2,522/year** — the same work,
+At 50,000 prompts/day that is **$21,103/year against $2,576/year** — the same work,
 the same model, for 12% of the bill.
 
 Three levers, in order of size:
 
-**Thinking off (4.1x).** Measured on Vertex, §4. Output tokens are ~8x the price of
+**Thinking off (4.0x).** Measured on us-central1, §4. Output tokens are ~8x the price of
 input and, with dynamic thinking, ~4x the volume, so this is where the money is.
 
 **Batch API (2x).** Vertex bills batch prediction at roughly half the interactive rate
@@ -575,9 +599,11 @@ Reproduce with `python scripts/cost_model.py --daily 50000`.
 rather than measured. The relative ordering is robust; the absolute figures should be
 confirmed against a real invoice.
 
-**Earlier figure corrected.** A previous version reported 14.1x, built on Developer
-API token counts. On Vertex the spread is 8.4x, because Vertex produced longer answers
-and shorter thinking traces. Same conclusion, smaller multiplier.
+**Earlier figures corrected twice.** A first version reported 14.1x on Developer API
+token counts; rebasing on Vertex `global` gave 8.4x, and on us-central1 it is 8.2x.
+Vertex produces longer answers and shorter thinking traces than the Developer API,
+which narrows the gap. The two Vertex regions agree within 2%, so the remaining
+uncertainty is between tiers, not between regions.
 
 ## 6d. Where the service actually saturates *(validated)*
 
