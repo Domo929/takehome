@@ -960,6 +960,18 @@ sustained sweep at 32, 64 and 128 would settle it; at several minutes per level 
 is roughly $60 of vendor spend, which is hard to justify against a workload averaging
 6 rps (§0b).
 
+**No re-validation was needed for this change**, and the reason is worth stating
+because it is not obvious. Both soaks ran at concurrency 64 already — the harness takes
+concurrency as a CLI flag and never calls `parallelism()`. Changing the default did not
+select a new operating point; it made the default agree with the one already measured.
+
+That does expose a seam worth guarding. The harness bypasses `parallelism()`, so a soak
+can validate one operating point while the service silently admits at another.
+`tests/test_service_wiring.py` now asserts the service's admission capacity equals
+`provider.parallelism()`, that it never exceeds the connection pool at any pool size,
+and that the adaptive limiter stays off. Those are config invariants, so they cost
+nothing to check and would have caught the divergence the old default of 32 introduced.
+
 ### A confounder I created and removed
 
 The first sweep used `max_output_tokens=256` and reported a ~20% "error" rate that was
