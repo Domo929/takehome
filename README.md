@@ -11,8 +11,9 @@ Adds Gemini 2.5 Flash as a provider, plus the evidence that it holds up under lo
 ```
 llm/            provider layer: gemini.py, response.py, errors.py, retry.py,
                 metrics.py, pricing.py  (llm.py is UNCHANGED from upstream)
-harness/        load harness (the subject under test) + cost governor
-loadtest/k6/    k6 control harness + ADC token sidecar
+service/        the integration deployed as an HTTP service - the system under test
+harness/        in-process batch driver + cost governor + preflight
+loadtest/k6/    external load generator (drives the service, or the vendor direct)
 mock/           fake Vertex endpoint for $0 iteration
 observability/  Prometheus + Grafana, provisioned dashboards
 tests/          12 tests, no network, no spend
@@ -35,6 +36,12 @@ make k6-constant          # k6 control run into Prometheus
 Grafana at http://localhost:3000, *Takehome* folder.
 
 ## Three things worth knowing
+
+**Our integration adds ~2 ms to a ~400 ms request** and sheds load rather than
+collapsing. k6 drives `service/app.py` over HTTP the way production traffic would,
+and the same script can bypass us to hit the vendor directly; the difference is our
+cost. At 4x the sustainable rate our overhead stayed flat at 0.19 ms p99 while the
+service returned 503s instead of queueing. See FINDINGS §6.
 
 **The provided abstraction is untouched.** `llm/llm.py` is byte-identical to
 upstream. `GeminiResponse` extends `LLM.SimpleResponse` additively for the metadata

@@ -151,3 +151,59 @@ class EventLoopLagMonitor:
 def serve(port: int = 9464) -> None:
     """Expose /metrics for Prometheus to scrape."""
     start_http_server(port, registry=REGISTRY)
+
+
+# --- inbound service metrics -------------------------------------------------
+# These describe our own service receiving traffic, as opposed to the llm_* metrics
+# above which describe our outbound calls to the vendor. Keeping both lets a single
+# request be split into "time we spent" versus "time the vendor spent", which is the
+# only way to answer whether our integration adds meaningful cost.
+
+service_request_duration_seconds = Histogram(
+    "service_request_duration_seconds",
+    "End-to-end duration of an inbound /ask request, measured at our edge.",
+    ["outcome"],
+    buckets=_LATENCY_BUCKETS,
+    registry=REGISTRY,
+)
+
+service_overhead_seconds = Histogram(
+    "service_overhead_seconds",
+    "Inbound duration minus upstream vendor duration. Everything that is our fault: "
+    "framework, validation, JSON, event-loop scheduling, admission queueing.",
+    buckets=(
+        0.0005, 0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0,
+        float("inf"),
+    ),
+    registry=REGISTRY,
+)
+
+service_queue_wait_seconds = Histogram(
+    "service_queue_wait_seconds",
+    "Time spent waiting at the admission gate. Growth here is the earliest signal "
+    "of saturation, well before latency or errors move.",
+    buckets=(
+        0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, float("inf"),
+    ),
+    registry=REGISTRY,
+)
+
+service_requests_total = Counter(
+    "service_requests_total",
+    "Inbound requests by outcome.",
+    ["outcome", "finish_reason"],
+    registry=REGISTRY,
+)
+
+service_admission_rejected_total = Counter(
+    "service_admission_rejected_total",
+    "Requests shed with 503 because the service was at capacity. Deliberate "
+    "backpressure, not an error: shedding beats unbounded queueing.",
+    registry=REGISTRY,
+)
+
+service_inflight = Gauge(
+    "service_inflight_requests",
+    "Inbound requests currently being served.",
+    registry=REGISTRY,
+)

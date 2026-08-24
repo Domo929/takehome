@@ -219,37 +219,82 @@ sends both spellings.
 
 ---
 
-## 6. Why k6 as a control, and what it showed *(validated)*
+## 6. Load testing the integration, not the vendor *(validated)*
 
-The Python harness cannot tell you whether a plateau is the client or the vendor. So
-k6 runs the same workload against the same endpoint from a runtime with no GIL, no
-shared pool, and open-loop arrival-rate executors.
+The brief asks for two things: a working integration, **and** evidence it will not
+fall over when real traffic is pointed at it. The thing that has to survive that
+traffic is *our code*. In production, requests arrive at us and we call Vertex.
 
-At 20 rps offered load with a 128-connection pool:
+So the integration is deployed as a service (`service/app.py`) and k6 drives it over
+HTTP exactly as production traffic would. The same k6 script can bypass us and hit the
+vendor directly, and the difference between those two runs is what our layer costs.
 
-| | Subject (Python) | Control (k6) |
-|---|---|---|
-| p50 | 405.7 ms | 407 ms |
-| p99 | 727.1 ms | 691.5 ms |
-| pool saturation, peak | 8.6 % | — |
-| event loop lag, peak | 2.14 ms | — |
+```
+A:  k6  ->  service/app.py  ->  llm/gemini.py  ->  Vertex
+B:  k6  ------------------------------------->  Vertex
+                                            A - B = our overhead
+```
 
-They agree within noise. That is the *correct* result at this load, and it is the
-point: it establishes that the two harnesses measure the same thing when there is
-headroom, which is what makes divergence at high load meaningful rather than an
-artifact of using two different tools.
+An earlier version of this harness had the Python driver call the provider in-process
+and compared that against k6 hitting the vendor. That measures the library, not the
+service: the driver was both load generator and system under test, and nothing on the
+receiving side — connection handling, admission, backpressure, framework cost — was
+exercised at all. `harness/run.py` is still there and still useful, but it is now
+scoped to what it actually models: an in-process batch client.
 
-The open-loop property matters independently. A closed-loop harness stops issuing
-requests when the service slows, so its recorded latency understates what real
-arrival traffic experiences — coordinated omission. k6's arrival-rate executors
-dispatch on a wall-clock schedule regardless of completions. The Python harness
-implements both modes and records `schedule_lag_ms` in open mode so the driver's own
-slippage is visible rather than assumed away.
+### Our layer costs about 2 ms
 
-`dropped_iterations` is a hard threshold. If k6 cannot sustain the offered rate, the
-run exits non-zero, because a generator-bound run's numbers are meaningless.
+Same workload, same backend, 50 rps for 30 s:
 
----
+| Path | p50 | p95 | p99 |
+|---|---|---|---|
+| direct to backend | 401.7 ms | 515.9 ms | 553.0 ms |
+| through our service | 403.6 ms | 515.7 ms | 565.3 ms |
+| **difference** | **+1.9 ms** | −0.2 ms | **+12.3 ms** |
+
+On a request that takes ~400 ms, the integration adds roughly **0.5 % at p50**.
+
+The service also reports its own decomposition per request, and it disagrees with the
+k6 delta in an informative way: internal overhead is **0.20 ms p50**, while k6 sees
+**1.9 ms**. The gap is the inbound HTTP hop itself — loopback transit, JSON parse,
+framework dispatch — which the service cannot see from the inside. Both numbers are
+worth having: the internal one localizes regressions, the k6 one is what a caller
+actually experiences.
+
+### It sheds load instead of collapsing
+
+Capacity is `provider.parallelism()` = 102 concurrent. With a ~0.4 s backend, Little's
+Law puts the ceiling near 255 rps. Measured:
+
+| Offered | Served | 503s | p50 | p99 | our overhead p99 |
+|---|---|---|---|---|---|
+| 100 rps | 2,001 | 0 | 404 ms | 566 ms | 0.25 ms |
+| 200 rps | 3,993 | 8 | 403 ms | 593 ms | 0.19 ms |
+| 300 rps | 4,616 | 1,385 | 386 ms | 1,013 ms | 0.21 ms |
+| 400 rps | 4,358 | 3,643 | 331 ms | 1,515 ms | 0.19 ms |
+
+Sustained throughput plateaus near **230 rps served**, close to the predicted 255.
+Past that the service returns 503 with `Retry-After` rather than queueing.
+
+Three things matter in that table. **Our overhead never moves** — 0.19–0.25 ms p99
+across a 4x range of offered load, so the service is not the thing degrading. **p50
+falls** at 400 rps because shed requests return immediately and admitted ones are not
+queued behind a growing backlog; that is backpressure working. And **zero dropped
+iterations** throughout, so the generator kept up and these are real numbers rather
+than rig artifacts.
+
+The failure mode is deliberate: shedding early keeps a saturated service legible and
+lets callers back off, where unbounded queueing would turn a throughput problem into a
+latency problem and then into a memory problem.
+
+### Direct-to-vendor still has a job
+
+Run B is not redundant. It is the only way to answer "is this plateau us or them?"
+without guessing, and it is open-loop by construction — k6's arrival-rate executors
+dispatch on a wall clock regardless of completions, so a slowdown shows up as queue
+growth rather than as a quietly reduced request rate. Closed-loop harnesses
+systematically understate latency under saturation, which is the most common way a
+load test flatters the system it is measuring.
 
 ## 7. Cost control *(validated)*
 

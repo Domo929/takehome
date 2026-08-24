@@ -24,7 +24,7 @@ import http from 'k6/http';
 import { check } from 'k6';
 import { Counter, Rate, Trend } from 'k6/metrics';
 import { scenarios, thresholds } from './scenarios.js';
-import { authHeaders, authMode, endpointUrl, modelId } from './lib/auth.js';
+import { authHeaders, authMode, endpointUrl, modelId, target } from './lib/auth.js';
 
 export const options = {
   scenarios,
@@ -45,6 +45,13 @@ const emptyResponses = new Counter('gemini_empty_responses');
 const truncated = new Counter('gemini_truncated_responses');
 const rateLimited = new Counter('gemini_rate_limited');
 const usableRate = new Rate('gemini_usable_responses');
+
+// Only populated when driving our own service, which reports its own cost per
+// request. These are the numbers that answer "how much does our layer add?".
+const serviceOverhead = new Trend('service_overhead_ms');
+const serviceQueueWait = new Trend('service_queue_wait_ms');
+const serviceUpstream = new Trend('service_upstream_ms');
+const serviceRejected = new Counter('service_rejected_503');
 
 // One counter per finish reason rather than a plain JS object. k6 runs each VU in an
 // isolated runtime and handleSummary in yet another, so module-scope mutable state
@@ -115,21 +122,27 @@ function buildQuestion(n) {
 
 export default function () {
   const seq = __ITER * 1000 + __VU;
-  const payload = JSON.stringify({
-    contents: [{ role: 'user', parts: [{ text: buildQuestion(seq) }] }],
-    systemInstruction: { role: 'user', parts: [{ text: SYSTEM_PROMPT }] },
-    generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: MAX_OUTPUT_TOKENS,
-      // The SDK emits this key in snake_case while every sibling field is camelCase.
-      // Both spellings are sent so the budget is honored regardless of which the
-      // endpoint matches on; sending only camelCase silently disables the setting.
-      thinkingConfig: {
-        thinking_budget: THINKING_BUDGET,
-        thinkingBudget: THINKING_BUDGET,
-      },
-    },
-  });
+  const question = buildQuestion(seq);
+
+  // Against our own service the payload is our API's shape; thinking budget and
+  // output cap are the service's configuration, not the caller's concern. Against
+  // the vendor we must build the full generateContent body ourselves.
+  const payload =
+    target() === 'service'
+      ? JSON.stringify({ question, system_prompt: SYSTEM_PROMPT, temperature: 0.7 })
+      : JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: question }] }],
+          systemInstruction: { role: 'user', parts: [{ text: SYSTEM_PROMPT }] },
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: MAX_OUTPUT_TOKENS,
+            // camelCase only. Vertex accepts either spelling (proto3 JSON), but they
+            // map to the same protobuf oneof field, so sending BOTH is a hard 400:
+            // "Invalid value at 'generation_config.thinking_config' (oneof)".
+            // Verified against the live API.
+            thinkingConfig: { thinkingBudget: THINKING_BUDGET },
+          },
+        });
 
   const res = http.post(endpointUrl(), payload, {
     headers: authHeaders(),
@@ -139,6 +152,14 @@ export default function () {
 
   if (res.status === 429) {
     rateLimited.add(1);
+    usableRate.add(false);
+    return;
+  }
+
+  // Our service sheds with 503 at capacity. That is deliberate backpressure rather
+  // than a fault, so it is counted separately from errors.
+  if (res.status === 503 && target() === 'service') {
+    serviceRejected.add(1);
     usableRate.add(false);
     return;
   }
@@ -157,11 +178,31 @@ export default function () {
     return;
   }
 
-  const usage = body.usageMetadata || {};
-  const promptTokens = usage.promptTokenCount || 0;
-  const visible = usage.candidatesTokenCount || 0;
-  const thinking = usage.thoughtsTokenCount || 0;
-  // Billed output is visible + thinking. Counting only candidatesTokenCount is the
+  let promptTokens, visible, thinking, finish, text;
+
+  if (target() === 'service') {
+    // Our service already did the parsing and the token accounting, and it reports
+    // how much of the latency was its own rather than the vendor's.
+    promptTokens = body.input_tokens || 0;
+    thinking = body.thinking_tokens || 0;
+    visible = Math.max(0, (body.output_tokens || 0) - thinking);
+    finish = body.finish_reason || 'UNKNOWN';
+    text = body.answer || '';
+    serviceOverhead.add(body.overhead_ms || 0);
+    serviceQueueWait.add(body.queue_wait_ms || 0);
+    serviceUpstream.add(body.upstream_ms || 0);
+  } else {
+    const usage = body.usageMetadata || {};
+    promptTokens = usage.promptTokenCount || 0;
+    visible = usage.candidatesTokenCount || 0;
+    thinking = usage.thoughtsTokenCount || 0;
+    const candidate = (body.candidates || [])[0] || {};
+    finish = candidate.finishReason || 'UNKNOWN';
+    const parts = (candidate.content || {}).parts || [];
+    text = parts.map((p) => p.text || '').join('').trim();
+  }
+
+  // Billed output is visible + thinking. Counting only the visible portion is the
   // accounting error that makes a run look cheaper than the invoice.
   const billedOutput = visible + thinking;
 
@@ -172,13 +213,7 @@ export default function () {
     (promptTokens * PRICE_INPUT_PER_1M + billedOutput * PRICE_OUTPUT_PER_1M) / 1e6
   );
 
-  const candidate = (body.candidates || [])[0] || {};
-  const finish = candidate.finishReason || 'UNKNOWN';
   recordFinishReason(finish);
-
-  const parts = ((candidate.content || {}).parts) || [];
-  const text = parts.map((p) => p.text || '').join('').trim();
-
   if (finish === 'MAX_TOKENS') truncated.add(1);
   if (!text) emptyResponses.add(1);
 
@@ -200,8 +235,14 @@ export function handleSummary(data) {
   };
 
   const out = {
-    target: __ENV.TARGET || 'mock',
+    target: target(),
     scenario: __ENV.SCENARIO || 'smoke',
+    service_rejected_503: metricCount('service_rejected_503'),
+    service_overhead_ms: {
+      p50: trendValue('service_overhead_ms', 'med'),
+      p99: trendValue('service_overhead_ms', 'p(99)'),
+    },
+    service_queue_wait_ms: { p99: trendValue('service_queue_wait_ms', 'p(99)') },
     model: modelId(),
     max_output_tokens: MAX_OUTPUT_TOKENS,
     thinking_budget: THINKING_BUDGET,

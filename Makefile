@@ -5,7 +5,7 @@ PY := .venv/bin/python
 K6 := k6
 export PYTHONPATH := .
 
-.PHONY: help venv preflight test calibrate auth-check mock-up mock-down obs-up obs-down obs-logs \
+.PHONY: help venv preflight test calibrate auth-check service-up service-down overhead capacity mock-up mock-down obs-up obs-down obs-logs \
         k6-smoke k6-ramp k6-constant sweep-mock pool-experiment clean
 
 help:
@@ -75,6 +75,28 @@ auth-check: ## Prove token fetches are O(VUs), not O(requests)
 		$(K6) run --quiet loadtest/k6/gemini.js
 	@echo "token fetches should equal VU count, not request count:"
 	@curl -s http://127.0.0.1:8099/__stats
+
+service-up: ## Run the integration service on :8000 (the system under test)
+	$(PY) -m service.app --port 8000 &
+	@sleep 3 && curl -sf http://127.0.0.1:8000/health >/dev/null && echo "service up on :8000"
+
+service-down: ## Stop the integration service
+	@pid=$$(ss -lptnH 'sport = :8000' 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1); \
+	if [ -n "$$pid" ]; then kill $$pid && echo "stopped $$pid"; else echo "not running"; fi
+
+overhead: ## A/B: through our service vs direct to backend
+	@for T in mock service; do \
+		echo "--- k6 -> $$T ---"; \
+		TARGET=$$T SCENARIO=constant RATE=50 DURATION=30s MAX_VUS=400 \
+			$(K6) run --quiet loadtest/k6/gemini.js 2>&1 | grep -E "p50=|requests="; \
+	done
+
+capacity: ## Find where our service sheds load
+	@for R in 100 200 300 400; do \
+		echo "--- offered $$R rps ---"; \
+		TARGET=service SCENARIO=constant RATE=$$R DURATION=20s MAX_VUS=1200 \
+			$(K6) run --quiet loadtest/k6/gemini.js 2>&1 | grep -E "p50=|requests="; \
+	done
 
 k6-smoke: ## k6 smoke test against the mock
 	TARGET=mock SCENARIO=smoke $(K6) run --quiet loadtest/k6/gemini.js

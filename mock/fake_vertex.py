@@ -200,10 +200,28 @@ def create_app(behavior: Behavior | None = None) -> FastAPI:
             config = body.get("generationConfig") or {}
             max_output = int(config.get("maxOutputTokens") or config.get("max_output_tokens") or 1024)
             thinking_cfg = config.get("thinkingConfig") or config.get("thinking_config") or {}
-            # The SDK serializes this field in snake_case while every sibling field in
-            # generationConfig is camelCase. Accept both: a gateway that assumes
-            # camelCase silently drops the budget, the model then thinks freely, and
-            # the first sign of trouble is a truncated answer and a larger invoice.
+            # Vertex accepts either spelling, but they are the same protobuf oneof
+            # field, so supplying both is rejected. Mirrored here: a mock more
+            # permissive than production hides exactly this class of bug, which is
+            # how a both-spellings payload survived local testing before failing
+            # against the real endpoint.
+            has_camel = "thinkingBudget" in thinking_cfg
+            has_snake = "thinking_budget" in thinking_cfg
+            if has_camel and has_snake:
+                state.note("400_oneof")
+                return JSONResponse(
+                    {
+                        "error": {
+                            "code": 400,
+                            "status": "INVALID_ARGUMENT",
+                            "message": (
+                                "Invalid value at 'generation_config.thinking_config' "
+                                "(oneof), oneof field '_thinking_budget' is already set."
+                            ),
+                        }
+                    },
+                    status_code=400,
+                )
             thinking_budget = thinking_cfg.get("thinkingBudget")
             if thinking_budget is None:
                 thinking_budget = thinking_cfg.get("thinking_budget")

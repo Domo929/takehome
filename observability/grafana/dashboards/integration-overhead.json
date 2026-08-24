@@ -1,0 +1,198 @@
+{
+  "uid": "takehome-overhead",
+  "title": "Integration Overhead",
+  "tags": [
+    "takehome",
+    "comparison"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 99,
+      "type": "text",
+      "title": "What this dashboard answers",
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**A: k6 -> `service/app.py` -> `llm/gemini.py` -> Vertex** \u2014 our integration under external traffic, exactly as production would drive it.\n\n**B: k6 -> Vertex directly** \u2014 the vendor baseline.\n\n**A - B is what our layer costs.** `service_overhead_seconds` measures the same thing from inside the process and excludes the inbound HTTP hop, so it will read lower than the A-B delta; the gap between them is transit and framework cost.\n\nIf throughput plateaus while `service_overhead_seconds` stays flat, the ceiling is the vendor or the outbound pool, not our code."
+      }
+    },
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Throughput: served vs shed",
+      "description": "Divergence here is the cost of the Python client.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "fillOpacity": 8
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(service_requests_total{outcome=\"success\"}[30s]))",
+          "legendFormat": "served",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(service_admission_rejected_total[30s]))",
+          "legendFormat": "shed (503)",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Where the time goes",
+      "description": "Inbound end-to-end vs upstream vendor time. The gap is ours.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(service_request_duration_seconds_bucket[1m])))",
+          "legendFormat": "inbound p99 (total)",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(llm_request_duration_seconds_bucket[1m])))",
+          "legendFormat": "upstream p99 (vendor)",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(service_overhead_seconds_bucket[1m])))",
+          "legendFormat": "our overhead p99",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Admission queue wait",
+      "description": "Growth here is the earliest saturation signal, ahead of latency or errors.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(service_queue_wait_seconds_bucket[1m])))",
+          "legendFormat": "queue wait p99",
+          "refId": "A"
+        },
+        {
+          "expr": "service_inflight_requests",
+          "legendFormat": "inflight",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Generator health (control only)",
+      "description": "k6 dropped_iterations must stay at zero. Anything above zero means the generator could not sustain the offered rate, and the control is no longer a valid reference.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(k6_dropped_iterations_total[30s]))",
+          "legendFormat": "dropped iterations/s",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(k6_vus)",
+          "legendFormat": "active VUs",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Rate limiting seen by each harness",
+      "description": "If only one harness sees 429s at the same offered rate, quota is being attributed to something other than raw request count.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(llm_retry_attempts_total{reason=\"LLMRateLimitError\"}[1m]))",
+          "legendFormat": "subject 429/s",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(k6_gemini_rate_limited_total[1m]))",
+          "legendFormat": "control 429/s",
+          "refId": "B"
+        }
+      ]
+    }
+  ]
+}
