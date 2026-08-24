@@ -56,55 +56,89 @@ this key's ceiling is unknown, and no throughput claim in this document rests on
 
 ---
 
-## 0b. Workload assumptions
+## 0b. The workload, confirmed
 
-These came from Evertune rather than from me, and they change the conclusions
-materially. Recording them explicitly because every number below is conditional on
-them, and a reader who assumes a different workload should discount accordingly.
+These came from Evertune rather than from me. The second one changed the architecture
+recommendation, so it is worth stating precisely.
 
-| | Stated | Consequence |
-|---|---|---|
-| Shape | **Batch**, not interactive | Turnaround of hours is acceptable, which unlocks the Batch API |
-| Volume | 100+ prompts per company per day, **thousands per day total** | Throughput is not a constraint. See below. |
-| Consumer of `answer` | **An LLM parser**, not a human or a regex | Truncation is dangerous, and structured output is likely the better interface |
-| Unknown | Whether logprobs are load-bearing; duplicate tolerance; 2.5 Flash migration plan | Open questions, listed in §8 |
+| | Confirmed |
+|---|---|
+| Real-time responses | Not a concern |
+| **Ad-hoc** | New reports are created throughout the day and **kicked off right away** |
+| **Scheduled** | Existing reports refresh monthly, weekly or daily per configuration |
+| Sampling | Each prompt runs **100 times** |
+| Downstream | Not in scope for this exercise; notes welcome |
+| Model | 2.5 Flash is fine, no migration pressure |
 
-### Throughput is not the problem
+### This is two workloads, not one
 
-Our service sustains ~250 rps. Against the stated volume:
+I had assumed "batch" and optimized accordingly. The confirmation says something more
+specific: there is a **predictable scheduled tier** and an **ad-hoc tier where someone
+just clicked a button and is waiting**. Those want different treatment, and conflating
+them leaves either money or responsiveness on the table.
 
-| Daily volume | Averaged over 24h | Whole day's work completes in |
-|---|---|---|
-| 5,000 | 0.06 rps | **22 seconds** |
-| 50,000 | 0.58 rps | **3.3 minutes** |
-| 500,000 | 5.8 rps | **33 minutes** |
+**The ad-hoc tier is a burst problem.** One new report is 100 prompts x 100 runs =
+**10,000 requests arriving at once**. At the measured 35.6 rps sustained (§6f):
 
-Even at 100x the stated volume, a single process finishes the daily sweep in about
-half an hour. **The engineering problem here is cost, not scale.** That reframes the
-whole exercise, and the sections below are ordered accordingly.
+| Report size | Requests | Time to complete | Cost |
+|---|---|---|---|
+| 50 prompts | 5,000 | 2.3 min | $1.44 |
+| **100 prompts** | **10,000** | **4.7 min** | **$2.88** |
+| 200 prompts | 20,000 | 9.4 min | $5.77 |
 
-It also means the load testing in this repo is best read as *headroom
-characterization* — establishing that capacity is a non-issue and finding where it
-would eventually bite — rather than as capacity planning against a real ceiling.
+So a new report takes about five minutes to populate, and two reports created in the
+same minute contend for the same quota. That is the scenario the admission control and
+the retry budget in this repo actually exist for — not steady-state load, which as §0b
+showed is trivially served.
+
+**The scheduled tier is where the money is.** It is predictable, it has no one waiting,
+and it therefore qualifies for the Batch API's ~50% discount. Modelling 200 reports on
+a mixed cadence (20% daily, 50% weekly, 30% monthly):
+
+| Reports | Scheduled requests/day | All interactive | Scheduled via Batch | Saved |
+|---|---|---|---|---|
+| 50 | 140,714 | $14,809/yr | $7,405/yr | $7,404 |
+| **200** | **562,857** | **$59,237/yr** | **$29,619/yr** | **$29,619** |
+| 1,000 | 2,814,286 | $296,187/yr | $148,093/yr | $148,094 |
+
+### Recommendation: route by tier
+
+```
+new report created  ->  interactive path  ->  optimize for time-to-first-report
+scheduled refresh   ->  Batch API         ->  optimize for cost, ~50% cheaper
+```
+
+The provider is already indifferent to which path calls it. What the split needs is a
+queue and a scheduler, which is a change to the calling layer rather than to the
+integration.
+
+### Throughput is still not the constraint, but bursts are
+
+At 200 reports the scheduled tier is ~563,000 requests/day, which at 35.6 rps is
+**4.4 hours of wall clock**. That fits in an overnight window comfortably, and Batch
+removes the question entirely by making turnaround someone else's problem.
+
+The ad-hoc tier is different: it is not throughput-limited in aggregate, it is
+*latency*-limited per report. Making a new report appear faster means more concurrency
+against a shared quota — which is exactly where §6f's ceiling and §6b's limiter matter.
 
 ---
 
-## 1. The model retires in seven weeks
+## 1. The model retires 2026-10-16 — noted, not blocking
 
 Gemini 2.5 Flash on Vertex is scheduled for retirement on **2026-10-16**, confirmed
-against Google's published deprecation schedule. That is roughly seven weeks from
-this write-up. The documented upgrade path is Gemini 3 Flash.
+against Google's published deprecation schedule. Evertune has confirmed 2.5 is fine for
+this exercise, so this is recorded as a risk rather than treated as a blocker.
 
-I am leading with this because it reframes the task. Nothing below changes — the
-integration works and the evidence stands — but "add Gemini 2.5 Flash" is a
-seven-week bet unless the abstraction makes the next swap cheap. So the real
-deliverable is a provider layer where replacing the model is a config change and a
-re-run of the same load suite, not an integration project. That is what I built:
-the harness, the metrics, and the cost governor are all model-agnostic, and
-`llm/pricing.py` is a lookup table rather than hardcoded arithmetic.
+It is worth one line in a runbook rather than a redesign. The provider takes the model
+from configuration, `llm/pricing.py` is a lookup table rather than hardcoded
+arithmetic, and the entire load suite re-runs unchanged against a different model. The
+migration cost here is a config change plus a re-run of §4 and §6f to confirm the
+economics carry over, which is roughly an afternoon.
 
-**What I would want to know:** whether Evertune has a migration window in mind, and
-whether the intent is to standardize on Gemini 3 Flash directly instead.
+The thing I would actually check before migrating is whether the thinking-token
+behaviour in §4 holds on Gemini 3 Flash. That is the finding most likely to be
+model-specific, and it is worth about 4x on the bill.
 
 ---
 
@@ -579,11 +613,14 @@ Three levers, in order of size:
 **Thinking off (4.0x).** Measured on us-central1, §4. Output tokens are ~8x the price of
 input and, with dynamic thinking, ~4x the volume, so this is where the money is.
 
-**Batch API (2x).** Vertex bills batch prediction at roughly half the interactive rate
-in exchange for asynchronous, up-to-24-hour turnaround. A daily brand sweep does not
-care about turnaround. This is the clearest remaining win and it is unavailable to an
-interactive workload — which is why the batch/interactive question was worth asking
-before optimizing anything.
+**Batch API (2x), on the scheduled tier only.** Vertex bills batch prediction at
+roughly half the interactive rate in exchange for asynchronous turnaround. Per §0b the
+workload splits: scheduled refreshes have nobody waiting and qualify; ad-hoc reports
+are kicked off on creation and do not. Applying it only where it fits is worth about
+**$29,600/year at 200 reports** — and getting that split right is the single
+highest-value decision in this document. Had I kept assuming a uniform batch workload,
+I would have recommended Batch for the ad-hoc path too and made new reports take up to
+a day to appear.
 
 **Context caching (~1.02x here).** Every request in a sweep carries the same system
 prompt, and cache hits bill input at a fraction of the normal rate. The effect is small
@@ -604,86 +641,6 @@ token counts; rebasing on Vertex `global` gave 8.4x, and on us-central1 it is 8.
 Vertex produces longer answers and shorter thinking traces than the Developer API,
 which narrows the gap. The two Vertex regions agree within 2%, so the remaining
 uncertainty is between tiers, not between regions.
-
-## 6f. Vertex absorbs overload with latency, never with rejection *(measured)*
-
-The most consequential capacity finding, and it validates a design decision made
-earlier on weaker evidence.
-
-Sustained concurrency sweep against `evertune-tests`/us-central1, 130 requests per
-level so each level is actually held rather than merely offered, thinking off,
-`max_output_tokens=512`:
-
-| Concurrency | Usable | Throughput | p50 | p99 | **429s** | Scaling efficiency |
-|---|---|---|---|---|---|---|
-| 8 | 127/130 | 4.8 rps | 1,403 ms | 3,974 ms | **0** | 100% |
-| 32 | 128/130 | **15.4 rps** | 1,495 ms | 3,994 ms | **0** | 80% |
-| 128 | 121/130 | 14.2 rps | 1,506 ms | **7,456 ms** | **0** | **18.5%** |
-
-Three things, in order of importance.
-
-**Zero rate-limit errors at any level.** Not one 429 across 630 requests up to
-concurrency 128. Dynamic Shared Quota on this project is generous enough that I could
-not reach its ceiling at a spend I was willing to incur on someone else's account.
-
-**Throughput plateaus around concurrency 32, then stops improving.** Sixteen times the
-concurrency bought no additional throughput — 15.4 rps at c=32 against 14.2 rps at
-c=128, which is slightly *worse*. Scaling efficiency collapses from 80% to 18.5%.
-
-**The cost of overload is entirely in the tail.** p50 barely moves (1,495 → 1,506 ms)
-while p99 nearly doubles (3,994 → 7,456 ms). Excess concurrency does not fail, it
-queues, and the queue shows up only in the tail.
-
-### Why this matters for the limiter
-
-§6b argued that an adaptive limiter should key on **latency** rather than error codes,
-on the grounds that Vertex absorbs overload by slowing down rather than rejecting. At
-the time that rested on the reference solution's report and on a simulated backend.
-
-It is now measured directly on this project: **there are no errors to key on.** A
-controller watching 429s would have seen a perfectly healthy service at concurrency
-128 and kept climbing, while p99 doubled and throughput fell. The latency gradient is
-not a refinement here; it is the only available signal.
-
-That said, it also weakens the case for the limiter existing at all — see the caveat
-below.
-
-### `parallelism()` should be about 32
-
-Measured, not guessed. Concurrency 32 is the knee: full throughput, p99 indistinguishable
-from c=8, and 4x headroom before the tail degrades. The current default derives from
-pool size and lands at 102, which is past the knee — it would buy nothing and cost tail
-latency. This is exactly the kind of number a hardcoded constant gets wrong, because it
-is a property of the deployment rather than of the code.
-
-### An honest limitation
-
-I did not find the 429 threshold, which means **Dynamic Shared Quota volatility remains
-unverified.** §6b's adaptive limiter is justified by capacity moving over time; what I
-have shown is that capacity is generous and that latency degrades before rejection. If
-DSQ turns out to be stable for a single tenant, the honest recommendation is a fixed
-limit at ~32 and deleting the adaptive machinery. Settling that needs a sustained run
-across hours or days, which is a larger spend than I would make unasked.
-
-### A confounder I created and then removed
-
-The first attempt at this sweep used `max_output_tokens=256` and reported a ~20%
-"error" rate that was not errors at all — it was `MAX_TOKENS` truncation being counted
-as unusable, which is correct behaviour by `is_usable` but useless as a capacity
-signal. Raising the cap to 512 dropped truncation from **20.0% to 3.6%**:
-
-| `max_output_tokens` | Truncated | Rate |
-|---|---|---|
-| 256 | 48 / 240 | **20.0%** |
-| 512 | 14 / 390 | **3.6%** |
-
-That is a finding in its own right: **a 256-token cap silently truncates one in five
-brand-recommendation answers**, and every one of them is a billed HTTP 200 that
-`finish_reason` is the only way to detect.
-
-The first sweep also had a design error worth naming: 40 requests cannot sustain
-concurrency 128, so the high-concurrency rows measured a burst rather than a held
-level. The rerun sizes requests to the level being tested.
 
 ## 6d. Where the service actually saturates *(validated)*
 
@@ -812,6 +769,123 @@ Whether this is worth building depends on a question only Evertune can answer: *
 logprobs are a free precision upgrade. If near-miss visibility is a feature customers
 would pay for, it is a new capability rather than an optimization.
 
+## 6f. Sustained load: what an 8-second test cannot tell you *(measured)*
+
+This section replaces an earlier version of itself, and the reason is the finding.
+
+My first capacity tests ran for **8.5 seconds**. Vertex enforces quota **per minute**,
+so a sub-minute run cannot trigger a per-minute ceiling no matter how hard it pushes.
+Reporting "no rate limiting observed" from an 8-second burst was not a weak result, it
+was an invalid one. The harness now supports sustained runs with 30-second time-series
+windows.
+
+### The sustained run
+
+`evertune-tests`/us-central1, concurrency 64, thinking off, `max_output_tokens=512`,
+stopped by the budget breaker at $8:
+
+| | |
+|---|---|
+| Duration | **8.7 minutes** (523 s) |
+| Requests | **19,223** (18,581 usable) |
+| Sustained throughput | **35.6 rps** = 2,136 requests/minute, peaking at 2,362 |
+| p50 / p90 / p99 | 1,401 / 3,038 / 7,033 ms |
+| Rate-limit responses | **8** (0.042%), all recovered by retry |
+| Truncated (`MAX_TOKENS`) | 642 (3.3%) |
+
+![Sustained load on Vertex](docs/evidence/soak-evidence.png)
+
+### Short tests understated throughput by 2.5x
+
+| Test | Duration | Concurrency | Throughput |
+|---|---|---|---|
+| burst | 8.3 s | 32 | 15.4 rps |
+| burst | 8.5 s | 128 | 14.2 rps |
+| **sustained** | **523 s** | **64** | **35.6 rps** |
+
+The 8-second tests measured connection establishment, not steady state: TLS handshakes
+and cold pool slots dominate a burst that short. Every capacity number I reported
+before this run was wrong by roughly a factor of two and a half, in the conservative
+direction.
+
+### Vertex does rate limit — and hand-rolled retries are why we can see it
+
+Eight requests received rate-limit responses. **Not one surfaced to a caller**: the
+retry engine absorbed all of them, and the aggregate error count is zero.
+
+This is the payoff for a decision made early and on principle. `llm/retry.py` does
+retries in our own code rather than delegating to `HttpRetryOptions` in the SDK,
+specifically so that retried failures remain visible to instrumentation. Had SDK
+retries been enabled, these eight would have been invisible — and the conclusion would
+have been the flattering, false "Vertex never rate limits us". The `llm_retry_attempts_total`
+series is the only place this appears.
+
+The honest headline: **Vertex rate limits at roughly 0.04% at 2,100 requests/minute**,
+which is a real ceiling being brushed rather than a ceiling being hit.
+
+### The ceiling is server-side, and that is now proven rather than assumed
+
+Throughput plateaued near 35 rps at concurrency 64. Little's Law says 64 concurrent at
+1.4 s should yield ~45 rps, so something limits us. The instrumentation says it is not
+us:
+
+| Signal | Peak during run | Reading |
+|---|---|---|
+| Connection pool saturation | **25%** | pool is not the constraint |
+| Event loop lag | **4.7 ms** | the Python process is keeping up |
+| Our per-request overhead | 0.5 ms p99 (§6d) | the code path is not slow |
+
+With the client demonstrably idle, the remaining explanation is Vertex. This is the
+distinction the whole subject-versus-control design exists to make, and here the
+client-side signals settle it without needing the control.
+
+### Stability over time, and a real tail trend
+
+Splitting the run in half:
+
+| | First half | Second half | Change |
+|---|---|---|---|
+| Throughput | 37.7 rps | 35.3 rps | **−6.2%** |
+| p50 | 1,387 ms | 1,424 ms | +2.7% |
+| **p99** | **5,106 ms** | **6,996 ms** | **+37.0%** |
+
+Throughput and p50 are essentially flat — 5.1% coefficient of variation across
+eighteen windows, and a −0.26 rps-per-window trend that is within noise. **The tail is
+not flat.** p99 grew 37% while p50 moved 2.7%, which is the signature of a queue
+forming somewhere upstream: most requests are unaffected while an increasing minority
+wait.
+
+That trend is the single best argument for the longer run the budget cut short. Eight
+minutes shows the tail growing; it cannot show where it stops.
+
+### What this still does not settle
+
+The run ended at the $8 ceiling, not at a natural conclusion. Two things remain open:
+
+**Dynamic Shared Quota volatility.** Eight minutes at a steady rate does not show
+capacity *moving*, which is the actual justification for the adaptive limiter in §6b.
+A run across hours, ideally spanning a business-hours boundary, would settle whether a
+fixed limit is sufficient.
+
+**Where the tail stops growing.** p99 was still climbing at 8.7 minutes. Whether it
+plateaus, or continues, decides whether this configuration is safe for a sweep that
+runs for an hour.
+
+### A confounder I created and removed
+
+The first sweep used `max_output_tokens=256` and reported a ~20% "error" rate that was
+truncation, not failure. Raising the cap to 512 dropped it to 3.6%, and the sustained
+run confirms 3.3% at 512:
+
+| `max_output_tokens` | Truncated |
+|---|---|
+| 256 | **20.0%** |
+| 512 | 3.6% |
+| 512 (sustained, n=19,223) | **3.3%** |
+
+**A 256-token cap silently truncates one in five brand-recommendation answers**, each
+a billed HTTP 200 that only `finish_reason` distinguishes from a complete one.
+
 ## 7. Cost control *(validated)*
 
 Confirmed rates: **$0.30 / 1M input, $2.50 / 1M output**, thinking billed at the
@@ -886,97 +960,109 @@ prototype.
 
 ## 9. Open questions and things still to confirm
 
-Split by who can answer. I have tried to state what each answer would actually change,
-since a question that does not change a decision is not worth anyone's time.
+### Answered by Evertune
 
-### For Evertune — answers that change the design
-
-| # | Question | What changes |
+| Question | Answer | What it changed |
 |---|---|---|
-| 1 | **Would `responseSchema` (structured JSON) replace the downstream LLM parser?** | Potentially removes an entire model call from the pipeline — a larger saving than every tuning lever in §6c combined. Also makes truncation detectable as malformed JSON rather than as a plausible short list. Changes the response contract, so it is a product decision. |
-| 2 | **Does "almost recommended" matter to the product?** §6e shows logprobs are free and surface brands invisible to counting. | If brand share is the deliverable, this is a free precision upgrade. If near-miss visibility is something customers would pay for, it is a new capability. Either way it needs a product decision before I build the extractor. |
-| 3 | **Does a duplicate answer cause harm?** | We retry on 429 and 5xx. If a retry lands after the original in fact succeeded, does double-counting a brand mention corrupt results? Decides whether idempotency keys are required. |
-| 4 | **Is the 2026-10-16 retirement of 2.5 Flash planned for?** | Seven weeks. If there is no migration scheduled, this should probably target Gemini 3 Flash instead, and the provider is built so that is a config change. |
-| 5 | **Is `LLM.SimpleResponse` a fixed contract?** | I treated it as immutable and extended by subclass (§2). If it is in fact ours to change, promoting `finish_reason` onto the base type is the cleaner design and Together needs it too. |
-| 6 | **Is up-to-24-hour batch turnaround acceptable?** | The Batch API is a straight 2x cost reduction and the single clearest win available (§6c). "Batch" was confirmed, but turnaround tolerance was not. |
-| 7 | **What counts as a correct answer?** | Needed to run a quality evaluation at all. Right now `thinking_budget=0` is justified on cost alone; without a correctness measure I cannot claim quality is unaffected. |
-| 8 | **Any region or data-residency constraints?** | Decides whether the `global` endpoint is usable, which affects both available capacity and latency. |
+| Batch or interactive? | **Both** — scheduled refreshes plus ad-hoc reports kicked off on creation | Drove the two-tier recommendation in §0b. Batch applies to the scheduled tier only, worth ~$29,600/yr at 200 reports. Assuming uniform batch would have made new reports take up to a day. |
+| Downstream consumer? | Out of scope, notes welcome | See the note below on structured output |
+| 2.5 Flash retirement? | 2.5 is fine | Recorded as a runbook risk rather than a redesign (§1) |
 
-### For Evertune — access we need
+### A note on downstream processing, since it was invited
 
-| # | Ask | Why |
-|---|---|---|
-| 9 | **A Vertex project with `aiplatform.googleapis.com` enabled** | Everything in §9's "not yet proven" list below is blocked on this. All current live numbers are Developer API (§0). |
-| 10 | **A spend ceiling we are authorised to use** | The harness is budget-capped and refuses to start without `--confirm`; I would rather be told the number than guess it. |
+Not built, because it changes the response contract and that is a product decision.
+But two things are worth recording.
 
-### Things I would verify myself, given a Vertex project
+**`responseSchema` would likely pay for itself.** Gemini can emit guaranteed-shape JSON
+directly. If a second model is currently turning prose into structured brand mentions,
+having Gemini produce the structure removes that call — plausibly a larger saving than
+anything in §6c, since it eliminates an inference rather than discounting one. It also
+converts truncation from a silent failure into a parse error: a `MAX_TOKENS` cut in
+the middle of JSON is malformed and detectable, whereas a truncated prose list reads
+as a complete short list. Given §6f measured **3.3% truncation** even at a 512-token
+cap, that distinction is not hypothetical.
+
+**Logprobs are free and additive** (§6e). If downstream ever wants "considered but not
+recommended" as a signal, the data is already on the response at no token cost. The
+extraction is the hard part, not the acquisition.
+
+### Still open — would change a decision
+
+1. **Does "almost recommended" matter to the product?** §6e shows Roborock holding
+   1.83% probability while appearing in 0 of 100 samples. If brand share is the whole
+   deliverable this is a free precision upgrade; if near-miss visibility is something
+   customers would pay for, it is a new capability. I cannot make that call from
+   outside.
+2. **What is an acceptable time-to-first-report?** §0b measures ~4.7 minutes for a
+   100-prompt report at current throughput. If that is too slow the lever is
+   concurrency against a shared quota, which trades directly against §6f's tail
+   growth. If it is fine, the ad-hoc tier needs no further work.
+3. **How often are reports created concurrently?** Two reports kicked off in the same
+   minute contend for the same quota. Burst shape determines whether admission control
+   needs a queue with fairness or whether first-come-first-served is adequate.
+4. **Does a duplicate answer cause harm?** We retry on 429 and 5xx — §6f recorded 8
+   such retries in 19,223 requests. If a retry lands after the original in fact
+   succeeded, does double-counting a mention corrupt a distribution built from exactly
+   100 samples? That decides whether idempotency keys are needed.
+
+### Would verify myself, given more budget
 
 Ordered by how load-bearing the current claims are:
 
-1. ~~Real throughput ceiling~~ — **done, §6f.** Knee at concurrency 32, ~15 rps, and
-   zero 429s up to c=128. Where 429s begin is still unknown; I could not reach the
-   ceiling at a spend I was willing to make on someone else's account.
-2. **Whether Dynamic Shared Quota actually moves over time.** Partially addressed:
-   §6f shows capacity is generous and that latency degrades before rejection, which
-   validates keying the limiter on latency. It does not show capacity *varying*, which
-   is the actual justification for adaptive limiting. A sustained run across hours
-   would settle it; if DSQ is stable for a single tenant, the honest call is a fixed
-   limit at 32 and deleting the adaptive machinery.
-3. **Batch pricing against a real invoice.** §6c uses Google's published rates. The
-   relative ordering is robust; the absolute figures are not verified.
-4. **Context cache hit rate in practice.** Implicit caching is on by default and the
-   provider now reads `cached_content_token_count`, but I have not observed a hit.
-5. **Quality: does thinking improve extraction accuracy?** The 6.3x cost argument for
-   `thinking_budget=0` is measured; the "answers look equivalent" claim is n=1
-   eyeballing and should not be relied on.
-6. **A Together baseline on the same prompts.** The brief asks for comparison against
-   other models, and the repo ships a Together provider. Not yet run.
-7. **Safety filter false-positive rate on competitor and brand prompts.** A block is
-   terminal and silent; the rate matters for a brand-tracking workload specifically.
-8. **`temperature=0` determinism.** Reported elsewhere as non-deterministic. Affects
-   whether results are reproducible run to run.
-9. **`global` versus regional endpoint behaviour** under the same load.
-10. **ADC token refresh under concurrency.** Tokens last about an hour; a fleet
-    refreshing in lockstep is a real thundering-herd risk. The sidecar makes the
-    boundary observable but a soak long enough to cross it has not been run.
-11. **Multi-worker scaling.** §6d shows a single worker is event-loop bound at ~250
-    rps. More workers is the standard fix, but each gets its own connection pool, so
-    the concurrency limit becomes per-worker rather than global. Untested.
+1. **Where the p99 tail stops growing.** §6f measured +37% p99 across 8.7 minutes with
+   p50 flat. It was still climbing when the budget breaker stopped the run. A sweep
+   that runs for an hour needs to know whether that plateaus.
+2. **Whether Dynamic Shared Quota actually moves.** The adaptive limiter (§6b) is
+   justified by capacity varying over time. §6f shows capacity is generous and that
+   latency degrades before rejection, which validates keying on latency — but not that
+   capacity *moves*. A multi-hour run spanning a business-hours boundary would settle
+   it. If DSQ is stable per-tenant, the honest call is a fixed limit at the measured
+   knee and deleting the adaptive machinery.
+3. **Batch API pricing against a real invoice.** §6c uses Google's published rates.
+   The ordering is robust; the absolute figures are unverified, and the two-tier
+   recommendation rests on them.
+4. **Quality: does thinking off change the answers?** The 4.0x cost argument is
+   measured; "the answers look equivalent" is n=1 eyeballing and should not be relied
+   on. This is the largest remaining gap in the recommendation.
+5. **A Together baseline on identical prompts.** The brief asks for comparison against
+   other models and the repo ships the provider. Not run.
+6. **Safety-filter false-positive rate on competitor and brand prompts.** A block is
+   terminal and silent; the rate matters specifically for brand tracking.
+7. **Burst behaviour at report-creation scale.** 10,000 requests arriving at once is
+   the real production event and has not been simulated end to end.
+8. **Multi-worker scaling.** §6d shows a single worker is event-loop bound; §6f shows
+   the ceiling was server-side at concurrency 64. Whether more workers raises the
+   client ceiling is untested.
 
 ### Operational readiness
 
-**Graceful shutdown.** SIGTERM and SIGINT flip the service into draining: new requests
-receive 503 with `Retry-After` while in-flight work finishes, bounded by
-`SERVICE_DRAIN_TIMEOUT_S`. For a batch worker this matters more than usual — dropping
-a request mid-flight means paying for tokens whose answer is discarded. Verified with
-six slow requests in flight; all six completed and new requests were refused.
+**Graceful shutdown.** SIGTERM and SIGINT drain: new requests receive 503 with
+`Retry-After` while in-flight work finishes, bounded by `SERVICE_DRAIN_TIMEOUT_S`. For
+a batch worker this matters more than usual — dropping a request mid-flight means
+paying for tokens whose answer is discarded. Verified with six slow requests in flight;
+all six completed.
 
-**Logging is deliberately sparse.** A daily sweep issues 100,000 requests; one line
-each is 100,000 lines nobody reads. So metrics carry the aggregate and logs carry the
+**Logging is deliberately sparse.** A scheduled sweep issues hundreds of thousands of
+requests; one line each is noise. Metrics carry the aggregate, logs carry the
 exceptional:
 
-- successes are never logged individually — Prometheus already answers "how many" and
-  "how fast"
-- every failure is logged once with full diagnostic metadata: error class, status
-  code, attempt number, backoff, retry history, vendor detail
-- retries log at WARNING rather than ERROR, because a retried request has not failed
-  yet, but a rising retry rate precedes real failure
-- **unusable 200s are logged**, tagged `billed_but_unusable` — they are the quietest
-  failure mode in the system and nothing else in the stack treats them as errors
+- successes are never logged individually
+- failures are logged once with error class, status code, attempt, backoff and retry
+  history
+- retries log at WARNING, not ERROR — a retried request has not failed yet, but a
+  rising retry rate precedes real failure
+- **unusable 200s are logged**, tagged `billed_but_unusable`, because nothing else in
+  the stack treats them as errors
 
-Output is single-line JSON for querying; `LOG_FORMAT=text` for local work. Pinned by
-tests, including one asserting five successful requests produce zero log lines.
+Pinned by tests, including one asserting five successful requests produce zero log
+lines.
 
 **Container.** Non-root, healthchecked, exec-form CMD so uvicorn is PID 1 and receives
-SIGTERM directly — a shell wrapper would swallow it and the drain would never run.
-Credentials are mounted, never baked in.
+SIGTERM directly. Credentials mounted, never baked in.
 
-**Deliberately not built: request IDs and tracing.** This workload measures aggregate
-brand-mention distributions across 100 samples per prompt. Individual request identity
-is not a unit anyone reasons about, so per-request correlation IDs would add plumbing
-for a question nobody is asking. If a future workload needed per-call attribution, the
-hook is the metrics module.
+**Deliberately not built: request IDs.** This workload measures aggregate distributions
+across 100 samples per prompt, so individual request identity is not a unit anyone
+reasons about.
 
-**Batch API is modelled, not implemented.** Given §6c it is the highest-value thing to
-build next, and it is a different API surface rather than a config flag.
-
+**Batch API is modelled, not implemented.** Per §0b it now has a clearly defined home —
+the scheduled tier — which makes it the highest-value thing to build next.

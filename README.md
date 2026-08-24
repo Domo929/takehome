@@ -37,10 +37,12 @@ Grafana at http://localhost:3000, *Takehome* folder.
 
 ## Three things worth knowing
 
-**Vertex never rate-limited us — it just got slower.** Zero 429s across 630 requests
-up to concurrency 128. Throughput plateaus at ~15 rps around concurrency 32; sixteen
-times the concurrency bought nothing while p99 nearly doubled. `parallelism()` now
-defaults to the measured knee of 32. See FINDINGS §6f.
+**Sustained load: 19,223 requests over 8.7 minutes at 35.6 rps.** Vertex rate-limited
+8 of them (0.042%), all recovered by retry — visible only because retries are
+hand-rolled rather than delegated to the SDK. Connection pool peaked at 25% and event
+loop lag at 4.7 ms, so the ceiling is server-side, not ours. Earlier 8-second tests
+understated throughput by 2.5x. See FINDINGS §6f and
+[docs/evidence/](docs/evidence/soak-evidence.png).
 
 **Logprobs are free and reveal brands that 100 samples miss.** Token counts are
 identical with them on or off. In a 100-sample run, Roborock appeared **zero times**
@@ -77,10 +79,6 @@ service returned 503s instead of queueing. See FINDINGS §6.
 upstream. `GeminiResponse` extends `LLM.SimpleResponse` additively for the metadata
 Gemini needs, so base-contract callers keep working — enforced by a test that fails if
 the base dataclass ever changes. See FINDINGS §2.
-
-**The model retires 2026-10-16.** Seven weeks out. The integration works, but the
-durable value is a provider layer where swapping models is a config change. See
-FINDINGS §1.
 
 **The connection pool is the throughput ceiling and it is invisible.** At pool=8
 against a service answering in 500 ms, the client reports 4.2 s and caps at 15.4 rps.

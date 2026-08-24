@@ -74,6 +74,40 @@ class StageResult:
     duration_s: float
     records: list[RequestRecord] = field(default_factory=list)
 
+    def windows(self, width_s: float = 30.0) -> list[dict[str, Any]]:
+        """Bucket the run into fixed windows.
+
+        A single aggregate hides *when* something changed. Quota throttling, warm-up
+        effects and drift are all visible only as a shape over time.
+        """
+        if not self.records:
+            return []
+        t0 = min(r.started_at for r in self.records)
+        buckets: dict[int, list[RequestRecord]] = {}
+        for r in self.records:
+            buckets.setdefault(int((r.started_at - t0) // width_s), []).append(r)
+
+        out = []
+        for idx in sorted(buckets):
+            rs = buckets[idx]
+            oks = [r for r in rs if r.ok]
+            lat = sorted(r.latency_ms for r in oks)
+            errs: dict[str, int] = {}
+            for r in rs:
+                if not r.ok and r.error_class:
+                    errs[r.error_class] = errs.get(r.error_class, 0) + 1
+            out.append({
+                "window_start_s": round(idx * width_s, 1),
+                "requests": len(rs),
+                "successful": len(oks),
+                "rps": round(len(oks) / width_s, 2),
+                "p50_ms": round(lat[len(lat) // 2], 0) if lat else 0,
+                "p99_ms": round(lat[min(len(lat) - 1, int(len(lat) * 0.99))], 0) if lat else 0,
+                "errors_by_class": errs,
+                "retries": sum(max(0, r.attempts - 1) for r in rs),
+            })
+        return out
+
     def summary(self) -> dict[str, Any]:
         oks = [r for r in self.records if r.ok]
         lat = sorted(r.latency_ms for r in oks)
@@ -125,6 +159,7 @@ class StageResult:
             },
             "errors_by_class": errors,
             "finish_reasons": finishes,
+            "windows": self.windows(),
         }
 
 
@@ -181,18 +216,40 @@ async def _one_request(
 
 async def run_closed_loop(
     provider: LLM, prompts: list[Prompt], governor: CostGovernor,
-    *, concurrency: int, requests: int, label: str,
+    *, concurrency: int, requests: int | None = None, duration_s: float | None = None,
+    label: str, progress_every_s: float = 30.0,
 ) -> StageResult:
-    sem = asyncio.Semaphore(concurrency)
-    stage = StageResult(label=label, mode="closed", concurrency=concurrency, arrival_rate=0.0, duration_s=0.0)
-    stopped = asyncio.Event()
+    """Hold ``concurrency`` requests in flight.
 
-    async def worker(index: int) -> None:
-        if stopped.is_set():
-            return
-        async with sem:
-            if stopped.is_set():
-                return
+    Either run a fixed number of requests, or — for saturation testing — sustain the
+    level for ``duration_s``. Duration is the mode that matters for quota: Vertex
+    enforces limits per minute, so a run shorter than a minute cannot trigger a
+    per-minute ceiling no matter how hard it pushes. A short burst that reports no
+    429s has demonstrated nothing about quota.
+    """
+    if requests is None and duration_s is None:
+        raise ValueError("one of requests or duration_s is required")
+
+    stage = StageResult(
+        label=label, mode="closed", concurrency=concurrency, arrival_rate=0.0,
+        duration_s=0.0,
+    )
+    stopped = asyncio.Event()
+    started = time.perf_counter()
+    issued = 0
+    last_progress = started
+
+    async def worker(worker_id: int) -> None:
+        nonlocal issued, last_progress
+        while not stopped.is_set():
+            if duration_s is not None:
+                if time.perf_counter() - started >= duration_s:
+                    return
+            else:
+                if issued >= (requests or 0):
+                    return
+            index = issued
+            issued += 1
             try:
                 record = await _one_request(provider, prompts[index % len(prompts)], governor)
             except BudgetExceeded as exc:
@@ -202,10 +259,28 @@ async def run_closed_loop(
                 return
             stage.records.append(record)
 
-    started = time.perf_counter()
-    await asyncio.gather(*(worker(i) for i in range(requests)))
+            now = time.perf_counter()
+            if progress_every_s and now - last_progress >= progress_every_s:
+                last_progress = now
+                _print_progress(stage, now - started)
+
+    await asyncio.gather(*(worker(i) for i in range(concurrency)))
     stage.duration_s = time.perf_counter() - started
     return stage
+
+
+def _print_progress(stage: StageResult, elapsed: float) -> None:
+    """Live progress during a long run, so a saturation test is watchable."""
+    recent = [r for r in stage.records if r.started_at >= (stage.records[-1].started_at - 30)]
+    ok = sum(1 for r in recent if r.ok)
+    errs = len(recent) - ok
+    lat = sorted(r.latency_ms for r in recent if r.ok)
+    p50 = lat[len(lat) // 2] if lat else 0
+    print(
+        f"    [{elapsed:>5.0f}s] last-30s: {ok:>4} ok  {errs:>3} err  "
+        f"p50 {p50:>6.0f}ms   total {len(stage.records)}",
+        flush=True,
+    )
 
 
 async def run_open_loop(
@@ -270,8 +345,12 @@ def parse_args() -> argparse.Namespace:
                    help="Closed loop: in-flight request cap. Accepts several for a sweep.")
     p.add_argument("--arrival-rate", type=float, nargs="+", default=[5.0],
                    help="Open loop: requests per second. Accepts several for a sweep.")
-    p.add_argument("--requests", type=int, default=100, help="Closed loop: requests per stage.")
-    p.add_argument("--duration", type=float, default=30.0, help="Open loop: seconds per stage.")
+    p.add_argument("--requests", type=int, default=None, help="Closed loop: requests per stage.")
+    p.add_argument("--duration", type=float, default=30.0,
+                   help="Seconds per stage. Used by open loop, and by closed loop when "
+                        "--requests is omitted. Sustained duration is what a saturation "
+                        "test needs: Vertex quota is per-minute, so a shorter run cannot "
+                        "trigger it.")
     p.add_argument("--corpus-size", type=int, default=200)
     p.add_argument("--complex-fraction", type=float, default=0.0)
     p.add_argument("--thinking-budget", type=int, default=None)
@@ -292,10 +371,18 @@ async def main_async(args: argparse.Namespace) -> None:
 
     stages = args.concurrency if args.mode == "closed" else args.arrival_rate
     per_stage = args.requests if args.mode == "closed" else None
-    total_requests = (
-        args.requests * len(stages) if args.mode == "closed"
-        else int(sum(rate * args.duration for rate in args.arrival_rate))
-    )
+    if args.mode == "closed":
+        if per_stage is not None:
+            total_requests = per_stage * len(stages)
+        else:
+            # Duration mode: estimate from concurrency and an assumed per-request time
+            # so the cost pre-flight still means something.
+            assumed_s = float(os.getenv("ASSUMED_REQUEST_S", "1.5"))
+            total_requests = int(
+                sum(c * args.duration / assumed_s for c in args.concurrency)
+            )
+    else:
+        total_requests = int(sum(rate * args.duration for rate in args.arrival_rate))
 
     est_input_tokens = int(mean_input_chars(prompts) * 0.27) + 32
     estimate = CostEstimate(
@@ -343,10 +430,18 @@ async def main_async(args: argparse.Namespace) -> None:
     try:
         for value in stages:
             if args.mode == "closed":
-                print(f"  stage concurrency={value} requests={per_stage} ...", flush=True)
+                if per_stage is not None:
+                    print(f"  stage concurrency={value} requests={per_stage} ...", flush=True)
+                else:
+                    print(
+                        f"  stage concurrency={value} duration={args.duration}s "
+                        f"(sustained) ...", flush=True
+                    )
                 stage = await run_closed_loop(
                     provider, prompts, governor,
-                    concurrency=int(value), requests=per_stage,
+                    concurrency=int(value),
+                    requests=per_stage,
+                    duration_s=None if per_stage is not None else args.duration,
                     label=f"{args.label}-c{int(value)}",
                 )
             else:
@@ -365,8 +460,19 @@ async def main_async(args: argparse.Namespace) -> None:
                 f"{summary['throughput_rps']} rps  "
                 f"p50 {summary['latency_ms']['p50']}ms  "
                 f"p99 {summary['latency_ms']['p99']}ms  "
-                f"${summary['cost_usd']:.4f}"
+                f"${summary['cost_usd']:.4f}  ({summary['duration_s']:.0f}s)"
             )
+            wins = summary.get("windows") or []
+            if len(wins) > 1:
+                print("      per-30s window:")
+                for w in wins:
+                    err = sum(w["errors_by_class"].values())
+                    flag = f"  errors={w['errors_by_class']}" if err else ""
+                    print(
+                        f"        t+{w['window_start_s']:>5.0f}s  {w['rps']:>6.2f} rps  "
+                        f"p50 {w['p50_ms']:>6.0f}  p99 {w['p99_ms']:>7.0f}  "
+                        f"retries={w['retries']}{flag}"
+                    )
             if governor.tripped:
                 print("  stopping: budget exhausted")
                 break
