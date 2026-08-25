@@ -248,6 +248,7 @@ async def _one_request(
     prompt: Prompt,
     governor: CostGovernor,
     *,
+    temperature: float = 0.7,
     # perf_counter instant this request was *due*, in open-loop mode. 0.0 means
     # closed loop, where there is no schedule to fall behind.
     scheduled_at: float = 0.0,
@@ -263,7 +264,9 @@ async def _one_request(
     # bottleneck and every latency number an understatement.
     lag_ms = max(0.0, (started - scheduled_at) * 1000.0) if scheduled_at else 0.0
     try:
-        result = await provider.ask_generic_question(prompt.system, prompt.question, 0.7)
+        result = await provider.ask_generic_question(
+            prompt.system, prompt.question, temperature
+        )
     except LLMError as err:
         latency_ms = (time.perf_counter() - started) * 1000.0
         return RequestRecord(
@@ -305,6 +308,7 @@ async def run_closed_loop(
     provider: LLM, prompts: list[Prompt], governor: CostGovernor,
     *, concurrency: int, requests: int | None = None, duration_s: float | None = None,
     label: str, progress_every_s: float = 30.0, warmup_s: float = 0.0,
+    temperature: float = 0.7,
 ) -> StageResult:
     """Hold ``concurrency`` requests in flight.
 
@@ -338,7 +342,10 @@ async def run_closed_loop(
             index = issued
             issued += 1
             try:
-                record = await _one_request(provider, prompts[index % len(prompts)], governor)
+                record = await _one_request(
+                    provider, prompts[index % len(prompts)], governor,
+                    temperature=temperature,
+                )
             except BudgetExceeded as exc:
                 if not stopped.is_set():
                     print(f"\n  budget breaker: {exc}")
@@ -382,7 +389,7 @@ def _print_progress(stage: StageResult, elapsed: float) -> None:
 
 async def run_open_loop(
     provider: LLM, prompts: list[Prompt], governor: CostGovernor,
-    *, arrival_rate: float, duration_s: float, label: str,
+    *, arrival_rate: float, duration_s: float, label: str, temperature: float = 0.7,
 ) -> StageResult:
     """Dispatch at a fixed rate regardless of completions.
 
@@ -401,7 +408,10 @@ async def run_open_loop(
 
     async def dispatch(prompt: Prompt, scheduled_at: float) -> None:
         try:
-            record = await _one_request(provider, prompt, governor, scheduled_at=scheduled_at)
+            record = await _one_request(
+                provider, prompt, governor,
+                temperature=temperature, scheduled_at=scheduled_at,
+            )
         except BudgetExceeded as exc:
             if not stopped.is_set():
                 print(f"\n  budget breaker: {exc}")
@@ -453,6 +463,11 @@ def parse_args() -> argparse.Namespace:
         "--provider", choices=("gemini", "together"), default="gemini",
         help="Which provider to drive. Together needs TOGETHER_API_KEY and "
              "TOGETHER_MODEL, and ignores the Gemini-specific flags below.",
+    )
+    p.add_argument(
+        "--temperature", type=float, default=0.7,
+        help="Sampling temperature. 0.7 is a convention, not a measured choice - "
+             "see FINDINGS 9.",
     )
     p.add_argument("--complex-fraction", type=float, default=0.0)
     p.add_argument(
@@ -534,6 +549,7 @@ async def main_async(args: argparse.Namespace) -> None:
             "fingerprint": corpus_fingerprint(prompts),
             "mean_input_chars": round(mean_input_chars(prompts), 1),
             "complex_fraction": args.complex_fraction,
+            "temperature": args.temperature,
             "repeat_prompt": args.repeat_prompt,
         },
         "estimate_usd": round(estimate.total_usd, 6),
@@ -561,6 +577,7 @@ async def main_async(args: argparse.Namespace) -> None:
                     duration_s=None if per_stage is not None else args.duration,
                     label=f"{args.label}-c{int(value)}",
                     warmup_s=args.warmup_s,
+                    temperature=args.temperature,
                 )
             else:
                 print(f"  stage arrival_rate={value}/s duration={args.duration}s ...", flush=True)
@@ -568,7 +585,7 @@ async def main_async(args: argparse.Namespace) -> None:
                 stage = await run_open_loop(
                     provider, prompts, governor,
                     arrival_rate=float(value), duration_s=args.duration,
-                    label=f"{args.label}-r{value}",
+                    label=f"{args.label}-r{value}", temperature=args.temperature,
                 )
 
             # Attach the client-health samples that fall inside this stage, so the

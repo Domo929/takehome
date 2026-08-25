@@ -1873,6 +1873,29 @@ makes the boundary observable; neither soak ran long enough to cross it.
 
 ## 9. Open questions and things still to confirm
 
+**Temperature is unmeasured, and it is the one remaining parameter that touches the
+product directly.** Everything here ran at 0.7, which is a convention I inherited
+rather than a result — the shipped `together.py` takes temperature as a caller
+argument and nothing in the repo justified a value.
+
+That matters more here than it would elsewhere. Evertune's method is 100 samples per
+prompt, and temperature is precisely the knob that controls how much those 100 samples
+differ from each other. Too low and the samples collapse toward one answer, so the
+distribution is narrow and rare-but-real brands never appear — the same blind spot
+§6e found in counting, made worse. Too high and the spread widens with noise rather
+than signal, and brand share starts moving between runs for no reason.
+
+So temperature sets the noise floor of the entire measurement, and I picked it by
+convention. It is now `--temperature` on the harness and recorded in every manifest,
+so at least the runs that produced these findings are labelled.
+
+The experiment is designed but **not run**: same prompt at 0.0 / 0.35 / 0.7 / 1.0 /
+1.4, n=50 each, ungrounded, measuring distinct-brand-set count, mention-frequency
+stability across two independent batches at each setting, and answer entropy. The
+decision rule stated in advance: pick the lowest temperature whose brand set stops
+growing, since past that point extra spread is noise rather than coverage. 250
+requests, roughly $0.08.
+
 **Grounding rate reconciliation.** §0c billed 20 grounded prompts on 2026-08-24 and
 recorded the count in its manifest. Comparing that against the "Grounding with Google
 Search" SKU in the billing console settles $14 vs $25 and reveals whether the free
