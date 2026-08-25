@@ -1,45 +1,23 @@
-"""Adaptive concurrency limiting.
+"""Adaptive concurrency limiting. Off by default.
 
-Why not a constant
-------------------
-``parallelism()`` returning a fixed integer assumes the vendor has a fixed capacity
-we can discover once. Vertex governs Gemini with Dynamic Shared Quota, which has no
-published per-project ceiling and varies with what everyone else in the region is
-doing. A number tuned on Tuesday is wrong on Wednesday, and it is wrong in both
-directions: too high and we bury a struggling backend, too low and we leave
-throughput unclaimed.
+The case for it and the measurements behind it are in FINDINGS 6b, including the
+reason it ships disabled: its justification is that Dynamic Shared Quota moves, and I
+have not proven that it does on any timescale that matters.
 
-Why errors alone are not enough
--------------------------------
-The obvious design is AIMD on 429s: back off when rate limited, creep up otherwise.
-It fails here for a specific, measured reason — **Vertex frequently does not reject
-excess load, it just slows down.** Runs at 500 concurrent have produced zero 429s and
-several-fold latency inflation instead. A controller watching only error codes sees a
-perfectly healthy service and keeps climbing.
+Two design choices that are not obvious from the code:
 
-So latency is the primary signal and errors are an override:
+**Latency is the primary signal, errors are an override.** The obvious design is AIMD
+on 429s -- additive-increase/multiplicative-decrease, creep up on success and halve on
+rejection. That fails here because Vertex often does not reject excess load, it just
+slows down, so an error-watching controller sees a healthy service and keeps climbing.
+A long-term baseline of fastest observed round-trips is compared against a short-term
+average; drift between them means queueing, and the limit drops before any error
+appears.
 
-* **Latency gradient.** Compare a long-term baseline of the fastest observed
-  round-trips against a short-term average. When the short-term average drifts above
-  the baseline, requests are queueing somewhere and the limit comes down
-  proportionally — before any error appears.
-* **Errors.** A 429, 503 or timeout triggers immediate multiplicative decrease. This
-  is the safety net, not the main mechanism.
-
-Why gradient rather than plain AIMD
------------------------------------
-Additive increase of one permit per success converges far too slowly to be useful in
-a load test or a traffic spike: climbing from 16 to 64 takes on the order of a
-thousand successful requests. The gradient form multiplies toward the estimated
-capacity and adds an allowance proportional to ``sqrt(limit)``, so it reaches a new
-operating point in tens of requests rather than thousands.
-
-Honest scope
-------------
-Against a backend with genuinely fixed capacity, a well-tuned constant performs about
-as well as this does — the constant simply has to be tuned, and re-tuned. Adaptive
-limiting earns its place when capacity *moves*, which is precisely the case with
-shared quota.
+**Gradient rather than additive increase.** Adding one permit per success climbs from
+16 to 64 in roughly a thousand requests, which is slower than any traffic spike. The
+gradient form multiplies toward estimated capacity plus an allowance proportional to
+sqrt(limit), reaching a new operating point in tens of requests.
 """
 
 from __future__ import annotations

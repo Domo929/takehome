@@ -14,10 +14,19 @@ class Together(LLM):
 
     async def ask_generic_question(self, system_prompt: str, question: str, temperature: float, *, grounded: bool = False) -> LLM.SimpleResponse:
         if grounded:
-            # Refusing is the point. Returning an ungrounded answer here would satisfy
-            # the type signature and silently corrupt any comparison that assumed the
-            # request was honoured.
-            raise NotImplementedError("Together does not support grounded generation")
+            # Together has tool calling but no first-party web search, so grounding
+            # here would mean bolting on a third-party search API. That is buildable,
+            # and it is deliberately not done: the grounded condition would then be
+            # measuring our retrieval against Google's rather than model against
+            # model, which is not the comparison anyone wants.
+            #
+            # Raising rather than answering ungrounded is the point. A silent
+            # downgrade satisfies the type signature and corrupts any comparison that
+            # assumed the request was honoured.
+            raise NotImplementedError(
+                "Together has no native grounding; wiring an external search provider "
+                "would measure retrieval, not the model"
+            )
 
         response = await self.__client.chat.completions.create(
             model=self.__model,

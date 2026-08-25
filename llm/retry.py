@@ -91,11 +91,10 @@ class RetryPolicy:
     budget: RetryBudget | None = None
 
     def backoff(self, attempt: int, retry_after: float | None = None) -> float:
-        """Full-jitter exponential backoff, honoring a server Retry-After when longer.
+        """Full-jitter exponential backoff, floored at Retry-After when the server sends one.
 
-        Full jitter (uniform over ``[0, computed]``) rather than equal jitter because
-        synchronized clients retrying in lockstep is exactly the failure mode that
-        turns one 429 into a thundering herd.
+        Full jitter (uniform over [0, computed]) rather than equal jitter: clients
+        retrying in lockstep is what turns one 429 into a thundering herd.
         """
         capped = min(self.max_delay_s, self.base_delay_s * (2**attempt))
         delay = random.uniform(0.0, capped)

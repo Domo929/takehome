@@ -49,6 +49,7 @@ from harness.budget import BudgetExceeded, CostEstimate, CostGovernor, confirm_o
 from harness.workload import Prompt, build_corpus, corpus_fingerprint, mean_input_chars
 from llm.errors import LLMError
 from llm.gemini import Gemini
+from llm.together import Together
 from llm.llm import LLM
 from llm.metrics import EventLoopLagMonitor, serve as serve_metrics
 from llm.pricing import cost_usd
@@ -60,6 +61,9 @@ class RequestRecord:
 
     prompt_id: str
     kind: str
+    # An instant on time.perf_counter's monotonic clock, NOT a wall-clock timestamp.
+    # Only differences between these are meaningful; the absolute value has no epoch.
+    # Every other clock in this file must match it or windowing silently misaligns.
     started_at: float
     latency_ms: float
     ok: bool
@@ -90,6 +94,8 @@ class StageResult:
     warmup_s: float = 0.0
     # Timestamped client-health samples. Without these the claim "the ceiling is our
     # event loop, not the vendor" rests on a live dashboard nobody else can re-read.
+    # (perf_counter instant, value) pairs. Same clock as RequestRecord.started_at,
+    # which is what lets a sample be attributed to the window it happened in.
     lag_samples: list[tuple[float, float]] = field(default_factory=list)
     pool_samples: list[tuple[float, float]] = field(default_factory=list)
 
@@ -103,10 +109,17 @@ class StageResult:
         lag_samples: list[tuple[float, float]] | None = None,
         pool_samples: list[tuple[float, float]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Bucket the run into fixed windows.
+        """Bucket the run into fixed time windows.
 
         A single aggregate hides *when* something changed. Quota throttling, warm-up
-        effects and drift are all visible only as a shape over time.
+        and drift are visible only as a shape over time.
+
+        Each returned dict is one window, keyed by metric name. The values are mixed
+        on purpose -- counts are ints, latencies and rates are floats, and
+        `errors_by_class` is a nested dict -- because this is serialised straight into
+        the run manifest as JSON. `dict[str, Any]` is the honest type for that; a
+        TypedDict would be more precise but would have to be kept in sync with the
+        manifest schema by hand.
         """
         if not self.records:
             return []
@@ -213,16 +226,41 @@ class StageResult:
         }
 
 
+def _build_provider(args: argparse.Namespace) -> LLM:
+    """Build the provider named by --provider.
+
+    Together is here because the brief asks how Gemini compares to other models, and a
+    comparison run through a different harness is not a comparison. The Gemini-specific
+    knobs below have no Together equivalent, so they are simply not passed rather than
+    faked: the shipped Together provider takes no configuration.
+    """
+    if args.provider == "together":
+        return Together()
+    return Gemini(
+        thinking_budget=args.thinking_budget,
+        max_output_tokens=args.max_output_tokens,
+        max_connections=args.max_connections,
+    )
+
+
 async def _one_request(
     provider: LLM,
     prompt: Prompt,
     governor: CostGovernor,
     *,
+    # perf_counter instant this request was *due*, in open-loop mode. 0.0 means
+    # closed loop, where there is no schedule to fall behind.
     scheduled_at: float = 0.0,
 ) -> RequestRecord:
+    # Blocks until the spend breaker allows another dispatch, and raises when the
+    # budget is gone. Deliberately before the clock starts: waiting on our own
+    # governor is not vendor latency.
     await governor.reserve()
 
     started = time.perf_counter()
+    # How late this request went out against its scheduled slot. Rising schedule lag
+    # in an open-loop run means the driver is falling behind, which makes it the
+    # bottleneck and every latency number an understatement.
     lag_ms = max(0.0, (started - scheduled_at) * 1000.0) if scheduled_at else 0.0
     try:
         result = await provider.ask_generic_question(prompt.system, prompt.question, 0.7)
@@ -411,6 +449,11 @@ def parse_args() -> argparse.Namespace:
                         "test needs: Vertex quota is per-minute, so a shorter run cannot "
                         "trigger it.")
     p.add_argument("--corpus-size", type=int, default=200)
+    p.add_argument(
+        "--provider", choices=("gemini", "together"), default="gemini",
+        help="Which provider to drive. Together needs TOGETHER_API_KEY and "
+             "TOGETHER_MODEL, and ignores the Gemini-specific flags below.",
+    )
     p.add_argument("--complex-fraction", type=float, default=0.0)
     p.add_argument(
         "--repeat-prompt", action="store_true",
@@ -468,14 +511,10 @@ async def main_async(args: argparse.Namespace) -> None:
     )
     confirm_or_exit(estimate, confirmed=args.confirm, budget_usd=args.budget_usd)
 
-    provider = Gemini(
-        thinking_budget=args.thinking_budget,
-        max_output_tokens=args.max_output_tokens,
-        max_connections=args.max_connections,
-    )
+    provider = _build_provider(args)
     governor = CostGovernor(
         budget_usd=args.budget_usd,
-        model=provider.model,
+        model=getattr(provider, "model", os.getenv("GEMINI_MODEL", "gemini-2.5-flash")),
         expected_cost_per_request=estimate.total_usd / max(1, total_requests),
     )
 
