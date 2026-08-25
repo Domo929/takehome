@@ -78,12 +78,21 @@ class StageResult:
     # measures TLS handshakes rather than the service.
     warmup_records: list[RequestRecord] = field(default_factory=list)
     warmup_s: float = 0.0
+    # Timestamped client-health samples. Without these the claim "the ceiling is our
+    # event loop, not the vendor" rests on a live dashboard nobody else can re-read.
+    lag_samples: list[tuple[float, float]] = field(default_factory=list)
+    pool_samples: list[tuple[float, float]] = field(default_factory=list)
 
     @property
     def all_records(self) -> list[RequestRecord]:
         return self.warmup_records + self.records
 
-    def windows(self, width_s: float = 30.0) -> list[dict[str, Any]]:
+    def windows(
+        self,
+        width_s: float = 30.0,
+        lag_samples: list[tuple[float, float]] | None = None,
+        pool_samples: list[tuple[float, float]] | None = None,
+    ) -> list[dict[str, Any]]:
         """Bucket the run into fixed windows.
 
         A single aggregate hides *when* something changed. Quota throttling, warm-up
@@ -92,6 +101,17 @@ class StageResult:
         if not self.records:
             return []
         t0 = min(r.started_at for r in self.records)
+
+        def bucket_peaks(samples: list[tuple[float, float]] | None) -> dict[int, float]:
+            peaks: dict[int, float] = {}
+            for ts, value in samples or []:
+                idx = int((ts - t0) // width_s)
+                if idx >= 0:
+                    peaks[idx] = max(peaks.get(idx, 0.0), value)
+            return peaks
+
+        lag_peaks = bucket_peaks(lag_samples)
+        pool_peaks = bucket_peaks(pool_samples)
         buckets: dict[int, list[RequestRecord]] = {}
         for r in self.records:
             buckets.setdefault(int((r.started_at - t0) // width_s), []).append(r)
@@ -114,6 +134,11 @@ class StageResult:
                 "p99_ms": round(lat[min(len(lat) - 1, int(len(lat) * 0.99))], 0) if lat else 0,
                 "errors_by_class": errs,
                 "retries": sum(max(0, r.attempts - 1) for r in rs),
+                # Peak, not mean: the question these answer is "did we ever become the
+                # bottleneck", and an average over 30 s hides exactly the spike that
+                # would say yes.
+                "event_loop_lag_ms": round(lag_peaks.get(idx, 0.0) * 1000, 1),
+                "pool_saturation": round(pool_peaks.get(idx, 0.0), 3),
             })
         return out
 
@@ -172,7 +197,9 @@ class StageResult:
             },
             "errors_by_class": errors,
             "finish_reasons": finishes,
-            "windows": self.windows(),
+            "windows": self.windows(
+                lag_samples=self.lag_samples, pool_samples=self.pool_samples
+            ),
         }
 
 
@@ -477,6 +504,7 @@ async def main_async(args: argparse.Namespace) -> None:
                         f"  stage concurrency={value} duration={args.duration}s"
                         f"{warm} ...", flush=True
                     )
+                stage_t0 = time.perf_counter()
                 stage = await run_closed_loop(
                     provider, prompts, governor,
                     concurrency=int(value),
@@ -487,12 +515,18 @@ async def main_async(args: argparse.Namespace) -> None:
                 )
             else:
                 print(f"  stage arrival_rate={value}/s duration={args.duration}s ...", flush=True)
+                stage_t0 = time.perf_counter()
                 stage = await run_open_loop(
                     provider, prompts, governor,
                     arrival_rate=float(value), duration_s=args.duration,
                     label=f"{args.label}-r{value}",
                 )
 
+            # Attach the client-health samples that fall inside this stage, so the
+            # manifest can answer "was the client the bottleneck" without a live
+            # dashboard.
+            stage.lag_samples = [x for x in lag.samples if x[0] >= stage_t0]
+            stage.pool_samples = [x for x in lag.pool_samples if x[0] >= stage_t0]
             summary = stage.summary()
             manifest["stages"].append(summary)
             write_ledger(args.out / f"{stage.label}.jsonl", stage)

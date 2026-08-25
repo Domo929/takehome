@@ -145,12 +145,29 @@ class EventLoopLagMonitor:
     def __init__(self, interval_s: float = 0.25) -> None:
         self._interval = interval_s
         self._task: asyncio.Task[None] | None = None
+        # Timestamped samples, so a run can attribute lag to the window it happened in
+        # rather than reporting one number for the whole run. Gauges are point-in-time:
+        # a scrape that lands between spikes misses them entirely, which is how a
+        # diagnostic this important ends up unreproducible from a saved artifact.
+        self.samples: list[tuple[float, float]] = []
+        # Pool saturation is sampled on the same clock so the two can be read against
+        # each other: high lag with an idle pool means we are the bottleneck, high lag
+        # with a full pool means we are waiting on the vendor.
+        self.pool_samples: list[tuple[float, float]] = []
 
     async def _run(self) -> None:
         while True:
             started = time.perf_counter()
             await asyncio.sleep(self._interval)
-            event_loop_lag.set(max(0.0, (time.perf_counter() - started) - self._interval))
+            lag = max(0.0, (time.perf_counter() - started) - self._interval)
+            event_loop_lag.set(lag)
+            now = time.perf_counter()
+            self.samples.append((now, lag))
+            for metric in REGISTRY.collect():
+                if metric.name == "llm_pool_saturation_ratio":
+                    for sample in metric.samples:
+                        self.pool_samples.append((now, sample.value))
+                    break
 
     def start(self) -> None:
         if self._task is None:

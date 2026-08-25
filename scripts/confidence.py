@@ -157,20 +157,26 @@ def main() -> None:
         print()
 
     # --- Thinking, from run manifests (section 4) --------------------------------
-    tb0 = latest("results/real/*tb0*-manifest.json")
-    tb1 = latest("results/real/*tb-1*-manifest.json")
+    # Explicit paths, not a glob. A glob here silently selected the `global`-region
+    # runs over the us-central1 ones and reported a ratio from the wrong pair.
+    tb0 = REPO / "results/real/uscentral-tb0-manifest.json"
+    tb1 = REPO / "results/real/uscentral-tb-1-manifest.json"
+    if not (tb0.exists() and tb1.exists()):
+        tb0 = tb1 = None
     if tb0 and tb1:
-        def toks(path: pathlib.Path) -> tuple[int, int]:
+        def stats(path: pathlib.Path) -> tuple[int, float, float, float]:
             m = json.loads(path.read_text())
-            st = m.get("stages", [])
-            n = sum(s.get("requests", 0) for s in st)
-            out = sum(s.get("tokens", {}).get("output", 0) for s in st)
-            return n, out
+            st = m["stages"][0]
+            n = st["requests"]
+            return (n, st["cost_usd"] / n, st["tokens"]["output"] / n,
+                    st["latency_ms"]["p50"])
 
-        n0, o0 = toks(tb0)
-        n1, o1 = toks(tb1)
-        print(f"Thinking (section 4), n={n0} and n={n1} per configuration")
-        print(f"  dynamic/off output-token ratio (point)      {(o1 / n1) / (o0 / n0):>8.2f}x")
+        n0, c0, o0, l0 = stats(tb0)
+        n1, c1, o1, l1 = stats(tb1)
+        print(f"Thinking, us-central1 (section 4), n={n0} and n={n1} per configuration")
+        print(f"  dynamic/off cost ratio (point)              {c1 / c0:>8.2f}x")
+        print(f"  dynamic/off output-token ratio (point)      {o1 / o0:>8.2f}x")
+        print(f"  dynamic/off p50 latency ratio (point)       {l1 / l0:>8.2f}x")
         print("  No interval: manifests store per-stage totals, not per-request")
         print("  values, so the sample cannot be resampled. n=15 per configuration")
         print("  is thin for a 4x claim -- treat it as the right order of magnitude")

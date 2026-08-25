@@ -51,7 +51,8 @@ enough to correct published numbers — see §4.
 The distinction matters in the direction the caveat predicted. Model behaviour —
 token economics, thinking mechanics, finish reasons, payload validation — transfers
 cleanly. Latency and capacity do not: on identical requests Vertex was **1.36x slower
-at p50 and 1.74x slower at p99**, and the thinking cost ratio moved from 6.8x to 4.1x.
+at p50 and 1.74x slower at p99** (Vertex `global` vs Developer API), and the thinking
+cost ratio moved from **6.4x to 4.0x**.
 Any number in this document that describes performance names its tier.
 
 ### What our own key allows
@@ -88,7 +89,7 @@ them leaves either money or responsiveness on the table.
 
 **The ad-hoc tier is a burst problem.** One new report is 100 prompts x 100 runs =
 **10,000 requests arriving at once** — and per §0c, run in *both* conditions, so
-**20,000**. At the measured 35.6 rps sustained ungrounded (§6f):
+**20,000**. At the measured 36.9 rps sustained ungrounded (§6f):
 
 | Report size | Requests (both conditions) | Ungrounded cost | **Grounded arm cost** | Total |
 |---|---|---|---|---|
@@ -120,11 +121,36 @@ grounded requests must run online at full rate regardless of how patient the cal
 (§6c). The table below therefore models the ungrounded half only. Modelling 200 reports
 on a mixed cadence (20% daily, 50% weekly, 30% monthly):
 
-| Reports | Scheduled requests/day | All interactive | Scheduled via Batch | Saved |
+| Reports | Ungrounded req/day | All interactive | Via Batch | Saved |
 |---|---|---|---|---|
 | 50 | 140,714 | $14,809/yr | $7,405/yr | $7,404 |
 | **200** | **562,857** | **$59,237/yr** | **$29,619/yr** | **$29,619** |
 | 1,000 | 2,814,286 | $296,187/yr | $148,093/yr | $148,094 |
+
+### The number that actually matters
+
+The table above is the **ungrounded arm only**, and it is the cheap arm. The grounded
+arm runs the same request volume with no Batch option and no caching, at the assumed
+$25/1k SKU:
+
+| Reports | Grounded req/day | **Grounded cost/yr** | Ungrounded (Batch) | Grounded share |
+|---|---|---|---|---|
+| 50 | 140,714 | **$1,298,827** | $7,405 | 99.4% |
+| **200** | **562,857** | **$5,195,309** | **$29,619** | **99.4%** |
+| 1,000 | 2,814,286 | $25,976,544 | $148,093 | 99.4% |
+
+**At 200 reports the scheduled tier costs roughly $5.2M/year, not $59K.** The $29,619
+Batch saving is real and worth taking, and it is **0.6%** of the bill.
+
+Three caveats, because this is the largest number in the document and it is built on
+the shakiest input. The $25/1k rate is unconfirmed (§0c) — at $14 the total is $2.9M.
+The cadence mix is my assumption, not Evertune's. And most importantly, **nobody has
+said every scheduled refresh runs both conditions**; if the grounded condition runs
+monthly while the ungrounded runs daily, this collapses by an order of magnitude.
+
+That is exactly why §9 lists sample-and-cadence policy for the grounded arm as worth
+more than every engineering lever here combined. The engineering is done; this is a
+product decision with a seven-figure range attached to it.
 
 ### Recommendation: route by tier
 
@@ -159,8 +185,9 @@ and its spread is the product. `harness/workload.py` now supports both shapes vi
 
 ### Throughput is still not the constraint, but bursts are
 
-At 200 reports the scheduled tier is ~563,000 requests/day, which at 35.6 rps is
-**4.4 hours of wall clock**. That fits in an overnight window comfortably, and Batch
+At 200 reports the scheduled tier is ~563,000 ungrounded requests/day, which at
+36.9 rps is **4.2 hours of wall clock** — and the same again grounded, at roughly a
+third the throughput. That fits in an overnight window comfortably, and Batch
 removes the question entirely by making turnaround someone else's problem.
 
 The ad-hoc tier is different: it is not throughput-limited in aggregate, it is
@@ -211,10 +238,15 @@ grounding is enabled, tokens are roughly 1% of the bill and the entire optimisat
 story becomes a rounding error.
 
 For a workload running 100 samples per prompt across both conditions, the grounded
-half is where essentially all the money goes. The right questions become: does the
-grounded condition need 100 samples, or would fewer suffice given its answers are
-already anchored to retrieved sources? And how far does the free monthly allowance
-(~5,000 grounded prompts) go?
+half is where essentially all the money goes.
+
+I initially proposed cutting the grounded sample count, guessing that source-anchored
+answers would vary less and need fewer samples. **Both halves of that were wrong.** 100
+is a settled methodological choice at Evertune rather than a tunable, and §0d shows
+grounded answers vary *more*, not less — 100 identical prompts issued 428 searches
+across 154 distinct query strings, so the grounded arm carries retrieval variance on
+top of generation variance. The lever does not exist. What remains is confirming the
+SKU rate and how far the free monthly allowance (~5,000 grounded prompts) goes.
 
 **Measured, 2026-08-24.** 20 prompts, each asked in both conditions, paired so every
 delta is within-prompt. Vertex `us-central1`, `gemini-2.5-flash`, thinking off, 512
@@ -242,18 +274,19 @@ prompt, invariant to how much the model read.
 
 **2. Truncation is the real operational risk, not cost inflation.** Grounded answers
 run 1.86x longer because they synthesise several sources. At the 512-token cap that
-§6d validated for ungrounded traffic, **half of all grounded answers were cut off**.
+§6f validated for ungrounded traffic, **half of all grounded answers were cut off**
+(10/20; bootstrap interval [30%, 70%]).
 Ungrounded truncated zero. A grounded run at 512 tokens is not a more expensive
 version of the ungrounded run; it is a **differently broken** one, and the breakage is
 silent — HTTP 200, billed in full, answer ends mid-sentence. Grounded traffic needs
-its own cap; 1,536 is the obvious starting point but I have not measured where it
-settles.
+its own cap. **§0d has since measured this: 1,536 brings truncation to 1%.**
 
 **3. Latency is the constraint that actually bites.** p95 went from 3.3s to 10.1s. The
 grounded request does a live search round trip before generation, and that round trip
 is not under anyone's control. Any timeout tuned on ungrounded traffic will fire on
-grounded traffic. The concurrency ceiling of 128 from §6g was measured ungrounded; a
-3x latency increase means the same pool sustains roughly a third the throughput.
+grounded traffic. The concurrency ceiling of 128 from §6g was measured ungrounded; the
+**3.7x latency increase measured at n=100 in §0d** means the same pool sustains roughly
+a third the throughput.
 
 ### Grounding changes the answer, which is the whole point
 
@@ -312,8 +345,13 @@ not move.
 
 ### What the code now does
 
-`GEMINI_GROUNDED=true`, or `Gemini(grounded=True)`, enables `google_search`. The two
-axes are independent, so all four combinations are expressible.
+Grounding is a **per-call** argument on the contract —
+`ask_generic_question(..., grounded=True)` — not a constructor flag. Both conditions
+run over the same prompts, so one provider instance serves both: one connection pool,
+one retry budget, one cost ledger. Two instances would halve the effective pool and
+double TLS handshakes, which per §6h is where our throughput actually goes.
+`GEMINI_GROUNDED` still sets the default for calls that do not specify. Thinking and
+grounding are independent axes, so all four combinations are expressible.
 
 Grounded responses carry their evidence: `search_queries` (what the model actually
 searched) and `grounding_sources` (the URLs it cited). That is not decoration. **A
@@ -454,8 +492,9 @@ retrieval, which is outside anyone's control.
 ### There is no dedup discount
 
 100 identical prompts issued 428 searches across 154 distinct query strings. Nothing
-was reused. A production unit costs the **full 100x** grounding SKU — **$2.53 per
-prompt measured**, against $0.03 for the ungrounded arm.
+was reused. A production unit costs the **full 100x** grounding SKU. Measured total was
+**$2.64 per prompt** — $2.53 of SKU plus $0.11 of tokens, the latter higher than
+modelled because grounded answers run long — against **$0.031** for the ungrounded arm.
 
 ### 1,536 tokens is the right cap for grounded traffic
 
@@ -595,18 +634,38 @@ one line of configuration away.
 Holding concurrency fixed at 64 and varying only the HTTP connection pool, against a
 service answering in a flat 500 ms:
 
-| Pool | Throughput | p50 latency | Predicted (`pool / 0.5 s`) |
-|---|---|---|---|
-| 8 | 15.4 rps | 4162 ms | 16 rps |
-| 16 | 30.6 rps | 2176 ms | 32 rps |
-| 64 | 110.5 rps | 519 ms | concurrency-bound |
-| 128 | 108.0 rps | 526 ms | concurrency-bound |
+| Pool | Throughput | Predicted (`pool / 0.5 s`) | p50 | **mean** | p90 | Pool ratio |
+|---|---|---|---|---|---|---|
+| 8 | 15.3 rps | 16 rps | 516 ms | **3,946 ms** | 9,684 ms | **8.0** |
+| 16 | 30.6 rps | 32 rps | 513 ms | **2,036 ms** | 5,249 ms | **4.0** |
+| 64 | 120.1 rps | concurrency-bound | 511 ms | 528 ms | 519 ms | 1.0 |
+| 128 | 120.7 rps | concurrency-bound | 510 ms | 524 ms | 519 ms | 0.5 |
+
+Raw output in `results/real/pool-experiment.txt`; reproduce with
+`make mock-up && make pool-experiment`.
 
 Throughput tracks pool size exactly until the pool exceeds concurrency, then flattens.
-The important part is the latency column: at pool=8 the client reports **4.2 seconds**
-for a service responding in **500 ms**. That 8× inflation is queueing inside our own
-process. Nothing in the vendor's response reveals it, and the obvious reading of
-"p50 is 4 seconds" is to blame Vertex.
+The latency columns are where the lesson is: at pool=8 the client's **mean** response
+time is **3.9 seconds** for a service answering in **500 ms**, an 8x inflation that is
+pure queueing inside our own process. Nothing in the vendor's response reveals it.
+
+**And the median hides it completely.** p50 stays at ~515 ms across every pool size,
+because the distribution is bimodal: whichever requests win a connection see the true
+500 ms, and the rest wait. Reading p50 alone, a starved pool looks perfectly healthy.
+It is p90 (9.7 s) and the mean that expose it. That is a general trap with saturated
+resources, and it is worth stating because the obvious dashboard — median latency —
+is exactly the one that stays flat while the system starves.
+
+> **Correction.** An earlier version of this table put 4,162 ms in a column labelled
+> "p50". That figure was the **mean**, mislabelled. The conclusion was right and the
+> throughput numbers reproduce almost exactly, but the statistic was wrong, and here
+> the difference between mean and median *is* the finding rather than a detail. Caught
+> by re-running the experiment to produce committed evidence for a table that
+> previously had none.
+
+`llm_pool_saturation_ratio` is in-flight ÷ pool size, so it **exceeds 1.0 when
+oversubscribed** — 8.0 at pool=8 above means eight requests queued for every
+connection. That is the number to alert on, and it moves long before the median does.
 
 This is why `llm_pool_saturation_ratio` (in-flight ÷ pool size) is a first-class
 metric. It turns the most commonly missed bottleneck in async LLM clients into a
@@ -654,8 +713,9 @@ and produce no text anyone reads. The ratio is stable across regions (4.1x in
 
 ### Correcting an earlier claim
 
-An earlier version of this document reported **6.3x**, measured on the Developer API
-alone. On Vertex the same experiment gives **4.0-4.1x**. Both are real; the ratio is
+An earlier version of this document reported **6.4x**, measured on the Developer API
+alone. On Vertex the same experiment gives **4.0x** in us-central1 and **4.1x** in
+`global`. Both are real; the ratio is
 not a constant of the model. The Developer API happened to produce longer thinking traces
 (477 vs 369 tokens per request) and shorter answers (80 vs 109 visible tokens), which
 widens the gap.
@@ -664,7 +724,7 @@ The direction and the order of magnitude hold on both tiers. The precise multipl
 does not, and quoting a single figure without naming the tier would have been wrong.
 This is exactly the transferability caveat from §0 turning out to matter in practice.
 
-**83.6% of billed output tokens were thinking** (6,682 of 7,997). Those tokens bill at
+**On the Developer API the same figure was 83.6%** (6,682 of 7,997 tokens). Those tokens bill at
 the output rate and produce no text the user ever sees. On a single-request probe the
 split was starker still: 176 thinking tokens to produce 21 visible ones, for a
 question whose answer was a five-brand list either way. The two answers were
@@ -677,7 +737,9 @@ thinking_budget=-1  ->  "iRobot (Roomba), Roborock, Eufy, Shark, and Ecovacs."
 
 ### The failure mode is silent, not loud
 
-With dynamic thinking, **1 of 15 responses came back `finish_reason=MAX_TOKENS`** —
+With dynamic thinking on the Developer API, **1 of 15 responses came back
+`finish_reason=MAX_TOKENS`** (both Vertex regions returned 15/15 `STOP` at a
+1,024-token cap) —
 HTTP 200, a partial answer, billed in full. Forcing the collision makes it obvious.
 With `thinking_budget=1024` against `max_output_tokens=128`:
 
@@ -693,7 +755,7 @@ it. A provider that returns `response.text` and moves on hands that fragment
 downstream as a successful answer, and a brand-mention counter then records exactly
 one brand from a question that asked for five.
 
-This is why `finish_reason` is carried on `GeminiResponse` and why `is_usable`
+This is why `finish_reason` is carried on the response contract and why `is_usable`
 requires `STOP` rather than merely non-empty text. In the run above it correctly
 marked that response unusable.
 
@@ -701,7 +763,7 @@ marked that response unusable.
 
 `thinking_budget=0` is the default in this provider, opt-in only. For a
 short-answer extraction workload the reasoning is not buying accuracy — it is buying
-latency and 6x the bill. A workload that genuinely needs reasoning should enable it
+latency and 4x the bill on Vertex. A workload that genuinely needs reasoning should enable it
 deliberately **and** raise `max_output_tokens` well above the thinking budget, because
 the two share one allowance.
 
@@ -857,8 +919,8 @@ decomposition never claims more time than actually elapsed.
 
 ### It sheds load instead of collapsing
 
-Capacity is `provider.parallelism()` = 102 concurrent. With a ~0.4 s backend, Little's
-Law puts the ceiling near 255 rps. Measured:
+Capacity was `provider.parallelism()` = **102** concurrent when this ran. With a ~0.4 s
+backend, Little's Law puts the ceiling near 255 rps. Measured:
 
 | Offered | Served | 503s | p50 | p99 | our overhead p99 |
 |---|---|---|---|---|---|
@@ -869,6 +931,11 @@ Law puts the ceiling near 255 rps. Measured:
 
 Sustained throughput plateaus near **230 rps served**, close to the predicted 255.
 Past that the service returns 503 with `Retry-After` rather than queueing.
+
+`parallelism()` has since moved to **128** (§6g), which would shift the predicted
+ceiling to ~320 rps. The shedding behaviour this section demonstrates is unaffected —
+it is a property of bounded admission, not of the particular bound — but the absolute
+rps figures above belong to the 102 configuration and should be read that way.
 
 Three things matter in that table. **Our overhead never moves** — 0.19–0.25 ms p99
 across a 4x range of offered load, so the service is not the thing degrading. **p50
@@ -1044,7 +1111,7 @@ ever apply to the other 1%.
 | Context caching | neither (below 2,048-token floor) | **0%** |
 | **Grounding SKU** | grounded only | **~99%** |
 
-So the 8.2x headline below is a **token-cost** result, and it is real, but it describes
+So the 8.0x headline below is a **token-cost** result, and it is real, but it describes
 the cheap half of the workload. Once grounding is on, none of these levers moves the
 number that matters. The remaining levers on grounded spend are the ones in §0c and
 §0d: confirming the real SKU rate, and deciding how many prompts get the grounded
@@ -1170,11 +1237,14 @@ different findings for a brand-tracking product, and only one of them is true.
 
 ### The sample sizes counting would need
 
-| Token | P | Chance of 0 hits in 100 | Samples for a ±20% estimate | Cost per prompt |
+| Token | P | Chance of 0 hits in 100 | Samples for ±20% (1 s.e.) | Cost per prompt |
 |---|---|---|---|---|
 | `'Rob'` | 0.0183 | 15.8% | 1,341 | $0.39 |
 | `'Shark'` | 0.0023 | 79.5% | 10,906 | $3.14 |
 | `'E'` | 0.0006 | 94.5% | 43,778 | $12.62 |
+
+Sample counts use `n = (1/0.2)^2 x (1-p)/p`, i.e. a relative standard error of 20% —
+one standard error, not a 95% interval. At 95% confidence multiply by ~3.8.
 
 To resolve Shark by counting you would need roughly **10,900 samples per prompt**, at
 about $3.14 each. Logprobs surfaced it inside the 100 samples already being taken, for
@@ -1230,7 +1300,7 @@ stopped by the budget breaker at $8:
 | Requests | **19,223** (18,581 usable) |
 | Sustained throughput | **35.6 rps** = 2,136 requests/minute, peaking at 2,362 |
 | p50 / p90 / p99 | 1,401 / 3,038 / 7,033 ms |
-| Rate-limit responses | **8** (0.042%), all recovered by retry |
+| Requests needing a retry | **9** (0.047%), all recovered |
 | Truncated (`MAX_TOKENS`) | 642 (3.3%) |
 
 ![Sustained load on Vertex](docs/evidence/soak-evidence.png)
@@ -1250,17 +1320,17 @@ direction.
 
 ### Vertex does rate limit — and hand-rolled retries are why we can see it
 
-Eight requests received rate-limit responses. **Not one surfaced to a caller**: the
+Nine requests needed a retry. **Not one surfaced to a caller**: the
 retry engine absorbed all of them, and the aggregate error count is zero.
 
 This is the payoff for a decision made early and on principle. `llm/retry.py` does
 retries in our own code rather than delegating to `HttpRetryOptions` in the SDK,
 specifically so that retried failures remain visible to instrumentation. Had SDK
-retries been enabled, these eight would have been invisible — and the conclusion would
+retries been enabled, these nine would have been invisible — and the conclusion would
 have been the flattering, false "Vertex never rate limits us". The `llm_retry_attempts_total`
 series is the only place this appears.
 
-The honest headline: **Vertex rate limits at roughly 0.04% at 2,100 requests/minute**,
+The honest headline: **Vertex made us retry roughly 0.05% of requests at ~2,100 requests/minute**,
 which is a real ceiling being brushed rather than a ceiling being hit.
 
 ### The ceiling is server-side, and that is now proven rather than assumed
@@ -1359,14 +1429,20 @@ credible rather than merely convenient:
 | Requests | 19,223 | **47,677** |
 | Sustained throughput | 35.6 rps | 36.9 rps |
 | p50 | 1,401 ms | 1,379 ms |
-| Rate-limit rate | 0.042% (8) | **0.038% (18)** |
+| Retry rate | 0.047% (9) | **0.050% (24)** |
 | Truncation at 512 cap | 3.3% | **3.3%** |
 | Pool saturation peak | 25% | 25% |
 | Event loop lag peak | 4.7 ms | <5 ms |
 
+> The pool and lag rows were read from live Prometheus during the runs and are **not**
+> in the committed manifests — the harness recorded the gauges but never persisted
+> them, so unlike every other row here they cannot be re-derived from `results/real/`.
+> `harness/run.py` now samples both into each 30-second window, so a re-run captures
+> them. Flagged rather than quietly dropped, because they are load-bearing for §6g.
+
 Two independent runs agreeing to three significant figures on truncation and to within
-10% on rate-limit rate is the part I would stake a production decision on. Throughput
-of ~37 rps at concurrency 64, p50 ~1.4 s, and a rate-limit rate under 0.05% at ~2,200
+7% on retry rate is the part I would stake a production decision on. Throughput
+of ~37 rps at concurrency 64, p50 ~1.4 s, and a retry rate of 0.047-0.050% at 2,100-2,200
 requests/minute are settled.
 
 **p99 is not settled and should be quoted as a range**, roughly 3.7–9.6 s, rather than
@@ -1392,7 +1468,7 @@ known to be unreliable for the same reason the rest of that sweep was: a short b
 measures connection warm-up, not steady state. Every level in that sweep except 64
 lacks a sustained measurement, so the "knee at 32" was an artifact of the shortest
 tests in the set. What I can defend is that **67,000 requests across 30 minutes held
-concurrency 64 at 36–37 rps** with a 0.04% rate-limit rate and no failures reaching a
+concurrency 64 at 36-37 rps** with a ~0.05% retry rate and no failures reaching a
 caller.
 
 What I have *not* established is whether 64 is optimal or merely sufficient. A
@@ -1467,6 +1543,21 @@ Vertex us-central1, 25–75 s measured per stage after a discarded warm-up:
 | 256 | 63.0 rps | 0.246 | 1,962 ms | 10,818 ms | **457 ms** | 50% |
 | 1024 | 43.7 rps | 0.043 | 17,557 ms | 49,443 ms | **4,301 ms** | 50% |
 
+> **Evidence caveat on the last two columns.** Throughput, p50 and p99 come straight
+> from the committed manifests in `results/real/`. **Event loop lag and pool saturation
+> do not** — the harness exported them as Prometheus gauges but never wrote them to the
+> manifest, so those two columns were read off a live dashboard during the run and
+> cannot be re-derived from the committed data. They are the load-bearing evidence for
+> this section's headline, so the gap matters.
+>
+> `harness/run.py` now samples both into every 30-second window
+> (`event_loop_lag_ms`, `pool_saturation`), verified against the mock. A re-run would
+> produce them as committed artifacts; re-running the real sweep to capture them costs
+> about $11 and I did not judge that worth it against a caveat. **The mechanism is
+> independently corroborated by §6h**, where enabling HTTP/2 collapsed lag from
+> 4,301 ms to 2 ms — which only makes sense if TLS work on the event loop was the
+> constraint.
+
 Three regimes, and the last column explains all of them.
 
 **Linear to 128.** Rps per unit of concurrency holds between 0.496 and 0.575 across a
@@ -1483,9 +1574,8 @@ reaches 49 seconds. Pushing 8x harder than the optimum delivers 40% less work.
 ### The diagnosis: it is us
 
 The connection pool sat at **50% throughout** — it was raised to 2,048 for these runs
-specifically so it could not be the constraint, and it was not. Vertex contributed 4
-rate-limit responses and 6 server errors across the whole extreme run, all absorbed by
-retry.
+specifically so it could not be the constraint, and it was not. Vertex forced 12
+retries across the whole extreme run (11 at c=256, 1 at c=1024), all absorbed.
 
 What moved is **event loop lag**: from under 5 ms through c=128, to 457 ms at 256, to
 **4,301 ms at 1024**. That is the Python event loop falling seconds behind on

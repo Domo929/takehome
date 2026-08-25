@@ -64,7 +64,7 @@ connection pool sits at 50% throughout. Pushing 8x past the optimum delivers 40%
 work. Scaling further means more processes, not more concurrency. See FINDINGS §6g.
 
 **Sustained load: 47,677 requests over 20.8 minutes at 36.9 rps**, with zero failures
-reaching a caller. Vertex rate-limited 0.038%, all absorbed by retry — visible only
+reaching a caller. Vertex forced a retry on 0.050% of requests, all absorbed — visible only
 because retries are hand-rolled rather than delegated to the SDK. The tail is not a
 queue in our process: p99 spikes correlate with vendor retry events (6,910 ms in
 windows with retries vs 4,717 ms without) while the connection pool sat at 25% and
