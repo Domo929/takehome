@@ -375,6 +375,14 @@ def parse_args() -> argparse.Namespace:
                         "trigger it.")
     p.add_argument("--corpus-size", type=int, default=200)
     p.add_argument("--complex-fraction", type=float, default=0.0)
+    p.add_argument(
+        "--repeat-prompt", action="store_true",
+        help=(
+            "Repeat one prompt instead of building distinct ones. This is the real "
+            "unit of work (one prompt sampled N times); distinct prompts are the "
+            "right shape for throughput measurement. See FINDINGS 0b."
+        ),
+    )
     p.add_argument("--thinking-budget", type=int, default=None)
     p.add_argument("--max-output-tokens", type=int, default=None)
     p.add_argument("--max-connections", type=int, default=None)
@@ -393,7 +401,11 @@ def parse_args() -> argparse.Namespace:
 
 
 async def main_async(args: argparse.Namespace) -> None:
-    prompts = build_corpus(size=args.corpus_size, complex_fraction=args.complex_fraction)
+    prompts = build_corpus(
+        size=args.corpus_size,
+        complex_fraction=args.complex_fraction,
+        repeat_prompt=args.repeat_prompt,
+    )
 
     stages = args.concurrency if args.mode == "closed" else args.arrival_rate
     per_stage = args.requests if args.mode == "closed" else None
@@ -446,6 +458,7 @@ async def main_async(args: argparse.Namespace) -> None:
             "fingerprint": corpus_fingerprint(prompts),
             "mean_input_chars": round(mean_input_chars(prompts), 1),
             "complex_fraction": args.complex_fraction,
+            "repeat_prompt": args.repeat_prompt,
         },
         "estimate_usd": round(estimate.total_usd, 6),
         "started_at": time.time(),

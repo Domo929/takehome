@@ -2,19 +2,27 @@
 
 > **Status.** Findings are labelled by the evidence behind them.
 >
-> *(measured on real Gemini)* — live requests against the **Gemini Developer API**.
-> Real model, real billing, real failure modes. Not Vertex: different quota pool and
-> endpoint, so absolute throughput and latency are not capacity numbers for
-> production. Model behaviour and token economics do transfer.
+> *(measured)* — live requests against **Vertex AI, project `evertune-tests`,
+> `us-central1`**, unless a section says otherwise. Real model, real billing, real
+> failure modes. Raw JSONL and manifests are committed under `results/real/`.
+>
+> *(measured on the Developer API)* — live requests against the **Gemini Developer
+> API**, which is a different quota pool and endpoint. Model behaviour and token
+> economics transfer; throughput and latency do not. Used only where a section
+> explicitly compares the two endpoints.
 >
 > *(validated)* — produced against the fake Vertex endpoint in `mock/`, which
 > exercises the full HTTP path, the real SDK, and the real connection pool at zero
-> cost. Used for mechanism proofs where the vendor is deliberately held constant.
->
-> *(pending credentials)* — designed and ready, needs a real Vertex project.
+> cost. Used for mechanism proofs where the vendor is deliberately held constant, and
+> for failure modes that cannot be provoked on demand against a real vendor.
 >
 > I have kept these separate rather than presenting harness numbers as vendor
-> measurements.
+> measurements. Total spend on Evertune's project is reported by
+> `python scripts/spend_report.py`.
+>
+> **Point estimates carry sample sizes, and the headline ratios carry bootstrap
+> intervals** — `python scripts/confidence.py` recomputes them from the committed raw
+> data without issuing a request.
 ---
 
 ## 0. Two different Google endpoints serve this model
@@ -66,7 +74,8 @@ recommendation, so it is worth stating precisely.
 | Real-time responses | Not a concern |
 | **Ad-hoc** | New reports are created throughout the day and **kicked off right away** |
 | **Scheduled** | Existing reports refresh monthly, weekly or daily per configuration |
-| Sampling | Each prompt runs **100 times** |
+| Sampling | Each prompt runs **100 times** — the *same* prompt, not 100 different ones |
+| Conditions | Every prompt runs **twice**: live search off, then on (§0c) |
 | Downstream | Not in scope for this exercise; notes welcome |
 | Model | 2.5 Flash is fine, no migration pressure |
 
@@ -78,22 +87,38 @@ just clicked a button and is waiting**. Those want different treatment, and conf
 them leaves either money or responsiveness on the table.
 
 **The ad-hoc tier is a burst problem.** One new report is 100 prompts x 100 runs =
-**10,000 requests arriving at once**. At the measured 35.6 rps sustained (§6f):
+**10,000 requests arriving at once** — and per §0c, run in *both* conditions, so
+**20,000**. At the measured 35.6 rps sustained ungrounded (§6f):
 
-| Report size | Requests | Time to complete | Cost |
-|---|---|---|---|
-| 50 prompts | 5,000 | 2.3 min | $1.44 |
-| **100 prompts** | **10,000** | **4.7 min** | **$2.88** |
-| 200 prompts | 20,000 | 9.4 min | $5.77 |
+| Report size | Requests (both conditions) | Ungrounded cost | **Grounded arm cost** | Total |
+|---|---|---|---|---|
+| 50 prompts | 10,000 | $1.44 | **$126.44** | **$127.88** |
+| **100 prompts** | **20,000** | **$2.88** | **$252.88** | **$255.76** |
+| 200 prompts | 40,000 | $5.77 | $505.77 | $511.54 |
 
-So a new report takes about five minutes to populate, and two reports created in the
-same minute contend for the same quota. That is the scenario the admission control and
-the retry budget in this repo actually exist for — not steady-state load, which as §0b
-showed is trivially served.
+**One new 100-prompt report costs about $256, of which $253 is the grounding SKU.** My
+earlier version of this table said $2.88, because it counted only the ungrounded arm
+and only tokens. That was the largest single cost error in this document.
+
+Timing also changes. Grounded p50 is 5.9s against 1.6s ungrounded (§0d), so the
+grounded arm dominates wall clock as well as spend.
+
+That burst is the scenario the admission control and retry budget in this repo exist
+for — not steady-state load, which is trivially served.
+
+**The correction that matters most:** at ~$256 per report, the interesting question is
+no longer "how fast can we serve a report" but "does every prompt need the grounded
+condition, and how often does a report need refreshing". Those are product decisions
+that this measurement should inform, and they are worth more than any engineering
+lever in this document.
 
 **The scheduled tier is where the money is.** It is predictable, it has no one waiting,
-and it therefore qualifies for the Batch API's ~50% discount. Modelling 200 reports on
-a mixed cadence (20% daily, 50% weekly, 30% monthly):
+and its **ungrounded arm** therefore qualifies for the Batch API's ~50% discount.
+
+**The grounded arm does not qualify.** Batch prediction has no tool support, so
+grounded requests must run online at full rate regardless of how patient the caller is
+(§6c). The table below therefore models the ungrounded half only. Modelling 200 reports
+on a mixed cadence (20% daily, 50% weekly, 30% monthly):
 
 | Reports | Scheduled requests/day | All interactive | Scheduled via Batch | Saved |
 |---|---|---|---|---|
@@ -104,13 +129,33 @@ a mixed cadence (20% daily, 50% weekly, 30% monthly):
 ### Recommendation: route by tier
 
 ```
-new report created  ->  interactive path  ->  optimize for time-to-first-report
-scheduled refresh   ->  Batch API         ->  optimize for cost, ~50% cheaper
+new report, ungrounded arm    ->  interactive  ->  optimize time-to-first-report
+new report, grounded arm      ->  interactive  ->  no choice; ~99% of the cost
+scheduled refresh, ungrounded ->  Batch API    ->  ~50% cheaper
+scheduled refresh, grounded   ->  interactive  ->  no choice; tools are online-only
 ```
+
+The routing key is therefore **two dimensions, not one**: latency tolerance decides
+Batch vs interactive, and the grounding condition decides whether Batch is available at
+all. Only one of the four cells can take the discount, and it is the cheap one.
 
 The provider is already indifferent to which path calls it. What the split needs is a
 queue and a scheduler, which is a change to the calling layer rather than to the
 integration.
+
+### The unit of work is one prompt repeated, not many prompts
+
+Worth stating because it shaped the load testing and I initially got it wrong. The
+harness generates a corpus of *distinct* prompts, which is right for a throughput
+measurement — varied inputs avoid accidentally measuring a cache. But the real unit is
+**one prompt sampled 100 times**, which is a different thing, and §0d measures it
+directly.
+
+The distinction has no effect on throughput (the workload is request-bound, not
+content-bound, and at 35 input tokens nothing is cacheable either way — §6c). It has a
+large effect on *interpretation*: 100 samples of one prompt is a distribution estimate,
+and its spread is the product. `harness/workload.py` now supports both shapes via
+`--repeat-prompt`, so a load run can be told which one it is measuring.
 
 ### Throughput is still not the constraint, but bursts are
 
@@ -159,7 +204,9 @@ Grounding bills per grounded prompt, not in tokens. At published rates (~$25 per
 grounded answers are longer and so carry more token cost of their own.)*
 
 **This inverts the cost model in §6c.** Every token lever there — thinking off, Batch
-API, context caching — discounts *tokens*. None of them touch the grounding SKU. Once
+API — discounts *tokens*, and context caching cannot engage at all below its
+2,048-token minimum. None of them touch the grounding SKU, and Batch cannot even run a
+grounded request. Once
 grounding is enabled, tokens are roughly 1% of the bill and the entire optimisation
 story becomes a rounding error.
 
@@ -175,11 +222,11 @@ token cap. Cost $0.52. Raw data in `results/real/grounding-*.jsonl`.
 
 | | Ungrounded | Grounded | |
 |---|---|---|---|
-| Mean input tokens | 35.2 | **35.2** | **1.00x** |
-| Mean output tokens | 160.7 | 299.4 | 1.86x |
+| Mean input tokens | 35.2 | **35.2** | **1.00x [1.00, 1.00]** |
+| Mean output tokens | 160.7 | 299.4 | 1.86x [1.48, 2.45] |
 | p50 latency | 2,023 ms | 4,432 ms | 2.19x |
 | p95 latency | 3,256 ms | **10,076 ms** | 3.09x |
-| Truncated at 512 | 0 / 20 | **10 / 20** | — |
+| Truncated at 512 | 0 / 20 | **10 / 20** | 50% [30%, 70%] |
 | Answers carrying sources | 0 | 20 / 20 | — |
 | Modelled cost | $0.0082 | $0.5152 | 63x |
 
@@ -187,7 +234,8 @@ token cap. Cost $0.52. Raw data in `results/real/grounding-*.jsonl`.
 
 **1. Retrieved passages are not billed as prompt tokens.** My mock assumed roughly 6x
 input inflation, reasoning that retrieved context must be prepended to the prompt.
-**Input tokens are identical to the byte — 35.2 in both conditions.** Retrieval is
+**Input tokens are identical to the byte — 35.2 in both conditions, bootstrap ratio
+1.00 with an interval of [1.00, 1.00].** Retrieval is
 priced entirely in the per-prompt SKU and nowhere else. The mock has been corrected.
 This makes grounded cost *easier* to forecast than I expected: it is a flat adder per
 prompt, invariant to how much the model read.
@@ -304,8 +352,8 @@ So I ran exactly one unit. Same prompt, 100 grounded + 100 ungrounded, concurren
 | p50 latency | 1,613 ms | 5,909 ms | 3.7x |
 | p95 latency | 2,676 ms | 11,151 ms | 4.2x |
 | p99 latency | 4,592 ms | 13,722 ms | 3.0x |
-| Mean output tokens | 119.6 | 549.1 | 4.6x |
-| Truncated at 1,536 | 0 / 100 | **1 / 100** | — |
+| Mean output tokens | 119.6 | 549.1 | 4.59x [3.93, 5.35] |
+| Truncated at 1,536 | 0 / 100 | **1 / 100** | 1% [0%, 3%] |
 | Rate-limited | 0 | **0** | — |
 | Retried | 0 | 0 | — |
 | Silently degraded | 0 | **0** | — |
@@ -315,34 +363,54 @@ So I ran exactly one unit. Same prompt, 100 grounded + 100 ungrounded, concurren
 
 This is the payoff. Brand mention frequency, out of 100 samples each:
 
-| Brand | Ungrounded | Grounded | Shift |
-|---|---|---|---|
-| **Dreame** | 5 | **97** | **+92** |
-| **Narwal** | 0 | **36** | **+36** |
-| Ecovacs | 52 | 93 | +41 |
-| Eufy | 65 | 99 | +34 |
-| Shark | 56 | 80 | +24 |
-| Dyson | 0 | 19 | +19 |
-| Xiaomi | 0 | 14 | +14 |
-| Samsung | 6 | 33 | +27 |
-| **Anker** | 18 | **0** | **−18** |
-| **Neato** | 11 | **0** | **−11** |
-| Wyze | 7 | 0 | −7 |
-| Roomba / iRobot / Roborock | ~100 | ~90 | flat |
+Bootstrap 95% intervals on the difference, 100 samples per arm
+(`python scripts/confidence.py`):
 
-Dreame appears in **5% of ungrounded samples and 97% of grounded ones**. Narwal and
-Dyson do not exist in the model's unaided beliefs at all and are solidly present once
-it can search. In the other direction, **Neato went bankrupt in 2023** and Anker's
-robot vacuum line is marketed as Eufy — both appear only in the ungrounded condition.
+| Brand | Ungrounded | Grounded | Delta | 95% CI | |
+|---|---|---|---|---|---|
+| **Dreame** | 5 | **97** | **+92** | [+86, +97] | significant |
+| Ecovacs | 52 | 93 | +41 | [+30, +52] | significant |
+| Eufy | 65 | 99 | +34 | [+25, +44] | significant |
+| **Narwal** | 3 | **36** | **+33** | [+23, +43] | significant |
+| Samsung | 6 | 33 | +27 | [+17, +37] | significant |
+| Shark | 56 | 80 | +24 | [+12, +36] | significant |
+| Dyson | 4 | 19 | +15 | — | |
+| Xiaomi | 1 | 14 | +13 | — | |
+| Deebot | 56 | 58 | +2 | — | flat |
+| Roomba | 100 | 98 | −2 | — | flat |
+| Neato | 11 | 8 | −3 | — | not significant |
+| Roborock | 100 | 90 | −10 | — | |
+| **Anker** | 18 | **3** | **−15** | [−24, −7] | significant |
+| **iRobot** | 100 | **85** | **−15** | [−22, −9] | significant |
 
-That is the two conditions doing exactly what they are supposed to do: one reports what
-the model absorbed during training, the other reports what the live web says now. The
-gap between them is not noise, it is the measurement, and at n=100 these are not
-fragile numbers.
+Dreame appears in **5% of ungrounded samples and 97% of grounded ones** — a brand the
+model barely mentions on its own beliefs, and names almost every time once it can
+search. Narwal, Xiaomi and Dyson show the same shape more weakly. In the other
+direction Anker falls 18 to 3, consistent with its robot vacuums being marketed as
+Eufy, which rises 65 to 99.
+
+That is the two conditions doing what they are supposed to do: one reports what the
+model absorbed during training, the other reports what the live web says now. The gap
+is not noise, it is the measurement, and every delta above ±20 points clears its
+interval comfortably.
 
 It also means the ungrounded condition is **not** a degraded version of the grounded
-one. It carries genuine signal about model beliefs, including stale beliefs about a
-company that no longer exists.
+one. It measures something real and separately useful: what the model believes when
+nobody corrects it.
+
+> **Correction.** The first version of this table reported Narwal as 0, Dyson as 0,
+> Anker as 0 and Neato as 0 in one arm or the other, and I wrote a paragraph around
+> Neato "appearing only ungrounded" because the company went bankrupt in 2023. That was
+> an artifact of my own analysis script, which truncated the brand counter with
+> `most_common(12)`, so any brand ranking below twelfth in an arm was displayed as zero
+> rather than as its real count. The bug is fixed and the table above is recomputed
+> from the raw JSONL.
+>
+> **Neato is 11 versus 8, which is not a significant difference**, and the bankruptcy
+> story I built on it was wrong. It is a good illustration of the failure mode this
+> whole document keeps running into: a plausible narrative arriving faster than the
+> check that would have falsified it. I caught this one only because computing
+> confidence intervals forced a recount from source.
 
 ### Citation URLs are unique per request, so sources cannot be compared
 
@@ -555,6 +623,12 @@ provider derives one from the other so they cannot drift apart.
 > measurement axis is live search on versus off; thinking is an orthogonal setting
 > that applies within each of those conditions. The finding below is a cost and
 > latency result, not a statement about the product's measurement.
+>
+> **Precision:** n=15 per configuration. That is thin for a 4x claim, and the run
+> manifests store per-stage totals rather than per-request values, so the sample
+> cannot be bootstrapped after the fact. Read 4.0x as the right order of magnitude,
+> not a precise multiplier — the direction and rough size are what the recommendation
+> rests on, and neither is in doubt.
 
 
 Measured on **both** serving tiers: Vertex AI (`evertune-tests`, the production
@@ -918,7 +992,12 @@ Adaptive limiting is **off by default** (`GEMINI_ADAPTIVE=true` to enable), beca
 fixed limit is easier to reason about and the case for switching should be made with
 measurements from the real backend rather than assumed.
 
-## 6c. Cost at the stated workload: an 8.2x spread *(measured tokens, us-central1)*
+## 6c. Cost at the stated workload: an 8.0x spread on tokens *(measured, us-central1)*
+
+> **Read this section in light of §0c and §0d.** Everything below optimises *token*
+> cost. For a workload that runs the grounded condition, tokens are ~1% of the bill and
+> the grounding SKU is the rest. These levers are still worth taking — they are free —
+> but they do not touch the dominant cost.
 
 Given batch semantics and thousands of prompts per day, the levers that matter reduce
 cost per request. Token counts are measured on **Vertex us-central1** from
@@ -929,34 +1008,63 @@ dynamic thinking.
 |---|---|---|
 | interactive, dynamic thinking (the defaults) | 0.00115634 | 1.0x |
 | thinking off | 0.00028834 | 4.0x |
-| thinking off + context caching | 0.00028159 | 4.1x |
 | thinking off + Batch API | 0.00014417 | 8.0x |
-| **thinking off + Batch + caching** | **0.00014117** | **8.2x** |
+| **thinking off + Batch** | **0.00014417** | **8.0x** |
 
-At 50,000 prompts/day that is **$21,103/year against $2,576/year** — the same work,
-the same model, for 12% of the bill.
+*(An earlier version of this table had a "+ caching" row at 8.2x. Removed: see below —
+caching cannot engage at 35 input tokens.)*
+
+At 50,000 *ungrounded* prompts/day that is **$21,103/year against $2,631/year** — the
+same work, the same model, for 12% of the bill. The equivalent grounded volume, at the
+assumed SKU rate, would be **$461,500/year** before any of these levers apply.
 
 Three levers, in order of size:
 
 **Thinking off (4.0x).** Measured on us-central1, §4. Output tokens are ~8x the price of
 input and, with dynamic thinking, ~4x the volume, so this is where the money is.
 
-**Batch API (2x), on the scheduled tier only.** Vertex bills batch prediction at
-roughly half the interactive rate in exchange for asynchronous turnaround. Per §0b the
-workload splits: scheduled refreshes have nobody waiting and qualify; ad-hoc reports
-are kicked off on creation and do not. Applying it only where it fits is worth about
-**$29,600/year at 200 reports** — and getting that split right is the single
-highest-value decision in this document. Had I kept assuming a uniform batch workload,
-I would have recommended Batch for the ad-hoc path too and made new reports take up to
-a day to appear.
+**Batch API (2x), on the scheduled *and ungrounded* tier only.** Vertex bills batch
+prediction at roughly half the interactive rate in exchange for asynchronous turnaround.
+Per §0b the workload splits by latency tolerance: scheduled refreshes have nobody
+waiting and qualify; ad-hoc reports are kicked off on creation and do not.
 
-**Context caching (~1.02x here).** Every request in a sweep carries the same system
-prompt, and cache hits bill input at a fraction of the normal rate. The effect is small
-because inputs are tiny — about 35 tokens. It would matter considerably more if the
-system prompt grew to include brand lists or few-shot examples, which is a plausible
-direction. Implicit caching is on by default for Gemini 2.5, so the discount may
-already be arriving unrequested; the provider reads `cached_content_token_count` so
-the model reflects it rather than overstating spend.
+**A second constraint applies that I originally missed: batch prediction does not
+support tool use, so the grounded condition cannot run on Batch at all.** Grounding
+requires `tools: [{google_search: {}}]`, which is an online-inference feature.
+
+That is not a footnote, it inverts the conclusion of this section. Per §0d a grounded
+sample costs $0.025288 and an ungrounded one $0.000288, so **the grounded arm is ~99%
+of the bill for a workload that runs both conditions**. The 2x Batch discount can only
+ever apply to the other 1%.
+
+| Lever | Applies to | Share of spend it touches |
+|---|---|---|
+| Thinking off | both conditions | ~100% of *token* cost |
+| Batch API (2x) | ungrounded only | **~1%** |
+| Context caching | neither (below 2,048-token floor) | **0%** |
+| **Grounding SKU** | grounded only | **~99%** |
+
+So the 8.2x headline below is a **token-cost** result, and it is real, but it describes
+the cheap half of the workload. Once grounding is on, none of these levers moves the
+number that matters. The remaining levers on grounded spend are the ones in §0c and
+§0d: confirming the real SKU rate, and deciding how many prompts get the grounded
+treatment at all.
+
+**~~Context caching (~1.02x here).~~ Withdrawn — it cannot engage on this workload.**
+I modelled a ~1.02x saving on the reasoning that every request carries the same system
+prompt. That was wrong, and not by a little: **implicit caching on Gemini 2.5 Flash
+requires a minimum of 2,048 input tokens**, and every run in `results/real/` measures
+**~35**. The workload is 58x below the threshold, so the discount is not small here —
+it is structurally unreachable.
+
+I should have checked the floor before modelling the effect. The number was tiny enough
+that it never looked worth verifying, which is exactly how an unverifiable assumption
+survives into a headline figure.
+
+It would become real if the system prompt grew past 2,048 tokens — brand lists,
+few-shot examples, a taxonomy. That is a plausible direction and worth revisiting then.
+The provider already reads `cached_content_token_count`, so if a cache hit ever does
+arrive the cost model will reflect it rather than overstating spend.
 
 Reproduce with `python scripts/cost_model.py --daily 50000`.
 
@@ -965,12 +1073,16 @@ rather than measured. The relative ordering is robust; the absolute figures shou
 confirmed against a real invoice.
 
 **Earlier figures corrected twice.** A first version reported 14.1x on Developer API
-token counts; rebasing on Vertex `global` gave 8.4x, and on us-central1 it is 8.2x.
+token counts; rebasing on Vertex `global` gave 8.4x, on us-central1 8.2x, and removing
+the context-caching row that could never apply leaves **8.0x**.
 Vertex produces longer answers and shorter thinking traces than the Developer API,
 which narrows the gap. The two Vertex regions agree within 2%, so the remaining
 uncertainty is between tiers, not between regions.
 
 ## 6d. Where the service actually saturates *(validated)*
+
+> Ungrounded. See §6g's scope note: grounded latency is ~3.7x higher, which moves every
+> throughput number in this section without changing the mechanism.
 
 Even though throughput is not the binding constraint, it is worth knowing where the
 ceiling is. Backend latency was pinned low so the ceiling would be *our process*
@@ -1312,10 +1424,21 @@ run confirms 3.3% at 512:
 | 512 | 3.6% |
 | 512 (sustained, n=19,223) | **3.3%** |
 
+**These are ungrounded numbers.** Grounded answers average 4.6x more output tokens, and
+the same 512 cap truncates **50%** of them (§0c). The cap that works here is the wrong
+cap there; §0d measures 1% at 1,536. Any truncation policy has to be set per condition.
+
 **A 256-token cap silently truncates one in five brand-recommendation answers**, each
 a billed HTTP 200 that only `finish_reason` distinguishes from a complete one.
 
 ## 6g. The ceiling is 128, and it is our event loop — not Vertex *(measured)*
+
+> **Scope:** measured on **ungrounded** traffic. Grounded requests hold a connection
+> ~3.7x longer (§0d), so the same pool sustains roughly a third of the throughput, and
+> the optimum concurrency is not the same number. The *mechanism* below — that the
+> binding constraint is TLS work on our event loop rather than Vertex capacity — is
+> unaffected, because it is a property of the connection, not the request. The
+> *number* 128 should not be carried across to a grounded workload without re-measuring.
 
 The earlier attempt at this produced a "knee at 32" from a sweep whose stages ran 8
 seconds each. Those numbers were wrong because a cold connection pool spends its first
@@ -1614,8 +1737,10 @@ which path calls it. What is missing is a queue and a scheduler that routes new-
 bursts to the interactive path and refreshes to batch. Without that split, either new
 reports get slow or scheduled work costs double.
 
-**3. Decide the truncation policy deliberately.** §6f measured **3.3% truncation** at a
-512-token cap and **20% at 256**. `is_usable` currently discards truncated answers,
+**3. Decide the truncation policy deliberately, and per condition.** §6f measured
+**3.3% truncation** at a 512-token cap and **20% at 256** — *ungrounded*. The same 512
+cap truncates **50%** of grounded answers, and 1,536 brings that to 1% (§0c, §0d). One
+global cap cannot serve both. `is_usable` currently discards truncated answers,
 which for mention-counting I believe is right — a fragment silently skews counts, and
 that is worse than a visible failure. But it is a product decision, and at 3.3% of
 tens of thousands of requests it is not a rounding error.
@@ -1686,7 +1811,7 @@ having Gemini produce the structure removes that call — plausibly a larger sav
 anything in §6c, since it eliminates an inference rather than discounting one. It also
 converts truncation from a silent failure into a parse error: a `MAX_TOKENS` cut in
 the middle of JSON is malformed and detectable, whereas a truncated prose list reads
-as a complete short list. Given §6f measured **3.3% truncation** even at a 512-token
+as a complete short list. Given §6f measured **3.3% truncation** (ungrounded; 50% grounded, §0c) even at a 512-token
 cap, that distinction is not hypothetical.
 
 **Logprobs are free and additive** (§6e). If downstream ever wants "considered but not

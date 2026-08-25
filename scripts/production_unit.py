@@ -191,7 +191,10 @@ def stability(rows: list[dict]) -> dict:
         "distinct_query_sets": len(set(query_sets)),
         "total_searches_issued": sum(len(r["search_queries"]) for r in ok),
         "mean_pairwise_query_jaccard": mean_jaccard(query_sets),
-        "brand_frequency": brand_freq.most_common(12),
+        # Full counts, not most_common(N). Truncating here silently reported a
+        # brand as 0 in one arm when it merely ranked below the cutoff, which
+        # manufactured a "disappears entirely" story that the data did not support.
+        "brand_frequency": brand_freq.most_common(),
         "distinct_brand_sets": len({frozenset(b) for b in brand_sets}),
     }
 

@@ -35,7 +35,27 @@ make k6-constant          # k6 control run into Prometheus
 
 Grafana at http://localhost:3000, *Takehome* folder.
 
-## Three things worth knowing
+## What I found
+
+**Grounding is the measurement axis, and it is ~99% of the cost.** Evertune runs each
+prompt with live search off, then on; the delta is the product. A grounded request
+costs **88x** an ungrounded one because live search bills on a separate per-prompt SKU
+— and neither the Batch API (no tool support) nor context caching (needs 2,048 input
+tokens; the workload is 35) can discount it. I spent a while optimising *token* cost
+before realising it is the cheap 1%. See FINDINGS §0c and §6c.
+
+**One production unit, measured: 100 samples of one prompt, both conditions, $2.67.**
+Dreame appears in **5 of 100 ungrounded samples and 97 of 100 grounded** (95% CI on the
+difference: [+86, +97]). Anker falls 18 → 3 as Eufy rises 65 → 99. That is the two
+conditions working: one reports what the model absorbed in training, the other what the
+live web says now. Also settled there: 1,536 is the right output cap (1% truncation vs
+50% at 512), there is no dedup discount, and 100 grounded prompts at c=25 tripped no
+separate search quota. See FINDINGS §0d.
+
+**Citations cannot be compared across samples.** All 852 returned source URLs were
+unique — Vertex signs a per-request redirect token, so the same publisher gets a
+different URL every call. Provenance has to be resolved at collection time or it is
+gone permanently. This is the largest remaining engineering gap.
 
 **The concurrency ceiling is 128, and past it the bottleneck is our own event loop —
 not Vertex.** Throughput scales linearly to 73.7 rps at c=128, then *falls* to 63.0 at
@@ -59,9 +79,9 @@ need ~1,300 samples to see it, and ~10,900 to resolve Shark at 0.23%. See FINDIN
 
 **The workload is batch at thousands of prompts/day, so cost is the problem, not
 scale.** A 50,000-prompt day completes in 3.3 minutes at the measured ~250 rps. Moving
-to thinking-off + Batch API + context caching is an **8.2x cost reduction** —
-$21,103/year to $2,576/year at that volume, on tokens measured against Vertex
-us-central1.
+to thinking-off + Batch API is an **8.0x cost reduction** — $21,103/year to
+$2,631/year at that volume, on tokens measured against Vertex us-central1. That is the
+*ungrounded* arm only: Batch has no tool support, so the grounded arm cannot use it.
 See FINDINGS §0b and §6c.
 
 **Two endpoints, one provider.** Gemini is served by both the Gemini Developer API
@@ -96,8 +116,9 @@ contract is considered fixed.
 against a service answering in 500 ms, the client reports 4.2 s and caps at 15.4 rps.
 The vendor response gives no hint. Instrumented as `llm_pool_saturation_ratio`.
 
-**Dynamic thinking costs 4.0x more, and it is the SDK default.** Measured against
-`evertune-tests` in us-central1, n=15 per config: turning `thinking_budget` off gave
+**Dynamic thinking costs ~4x more, and it is the SDK default.** Measured against
+`evertune-tests` in us-central1, n=15 per config — thin for a precise multiplier, so
+read it as the right order of magnitude: turning `thinking_budget` off gave
 4.0x lower cost and 2.8x better p50, with 80% of billed output tokens being invisible
 reasoning. The ratio holds across regions and tiers; the latency does not — the same
 request ranges from 976 ms to 4,106 ms depending on tier and region alone. Default

@@ -65,15 +65,46 @@ class Prompt:
 
 
 def build_corpus(
-    *, size: int = 200, complex_fraction: float = 0.0, seed: int = 20260824
+    *,
+    size: int = 200,
+    complex_fraction: float = 0.0,
+    seed: int = 20260824,
+    repeat_prompt: bool = False,
 ) -> list[Prompt]:
     """Deterministic corpus.
 
     Seeded so a rerun issues the same questions in the same order: comparing two runs
     is only meaningful when the workload is identical.
+
+    Two shapes, because they measure different things:
+
+    * ``repeat_prompt=False`` (default) builds ``size`` *distinct* prompts. This is the
+      right shape for throughput work — varied inputs make it impossible to
+      accidentally measure a cache instead of the vendor.
+    * ``repeat_prompt=True`` repeats a single prompt ``size`` times, which is the real
+      unit of work: Evertune samples one prompt 100 times and reads the distribution.
+
+    Throughput does not care which is used — the workload is request-bound rather than
+    content-bound, and at ~35 input tokens nothing is cacheable either way (FINDINGS
+    6c). Interpretation cares a great deal, so the shape is explicit rather than
+    implied.
     """
     rng = random.Random(seed)
     prompts: list[Prompt] = []
+    if repeat_prompt:
+        template = TEMPLATES[0]
+        category = CATEGORIES[0]
+        question = template.format(category=category)
+        return [
+            Prompt(
+                id=f"repeat-{i:05d}",
+                system=SYSTEM_PROMPT,
+                question=question,
+                category=category,
+                kind="repeat",
+            )
+            for i in range(size)
+        ]
     for i in range(size):
         category = CATEGORIES[i % len(CATEGORIES)]
         use_complex = rng.random() < complex_fraction

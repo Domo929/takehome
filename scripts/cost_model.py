@@ -54,8 +54,10 @@ PRICE_OUT = 2.50
 BATCH_MULTIPLIER = 0.50
 CACHED_MULTIPLIER = 0.10
 
-# The system prompt is identical across a sweep, so it is the cacheable portion.
-# Measured input is ~37 tokens total; the fixed instruction is most of that.
+# Implicit caching on Gemini 2.5 Flash has a minimum input size. Below it, nothing is
+# cacheable at any price. The measured workload is ~35 input tokens, so this model used
+# to report a discount that cannot physically occur.
+IMPLICIT_CACHE_MIN_TOKENS = 2048.0
 SYSTEM_PROMPT_TOKENS = 25.0
 
 
@@ -63,7 +65,10 @@ def cost_per_request(profile: str, *, batch: bool, cached: bool) -> float:
     p = PROFILES[profile]
     inp, out = p["input"], p["output"]
 
-    cacheable = min(SYSTEM_PROMPT_TOKENS, inp) if cached else 0.0
+    # Caching is all-or-nothing against the minimum: a 35-token prompt is not
+    # partially cacheable, it is ineligible.
+    eligible = inp >= IMPLICIT_CACHE_MIN_TOKENS
+    cacheable = min(SYSTEM_PROMPT_TOKENS, inp) if (cached and eligible) else 0.0
     fresh = inp - cacheable
 
     # Discounts do not stack; whichever is larger wins on the cached portion.
@@ -86,9 +91,9 @@ def main() -> None:
     configs = [
         ("naive: interactive, dynamic thinking", "thinking-dynamic", False, False),
         ("thinking off", "thinking-off", False, False),
-        ("thinking off + caching", "thinking-off", False, True),
+
         ("thinking off + batch", "thinking-off", True, False),
-        ("thinking off + batch + caching", "thinking-off", True, True),
+
     ]
 
     # Grounding is a separate SKU and a separate measurement condition, so it is
@@ -102,8 +107,9 @@ def main() -> None:
     print()
     print("  At 100 samples per prompt, a single grounded prompt costs "
           f"${(tok + sku) * 100:.2f} against ${tok * 100:.2f} ungrounded.")
-    print("  Batch and cache discounts apply to tokens, not to the grounding SKU, so")
-    print("  every token lever in this model is nearly irrelevant once grounding is on.")
+    print("  Batch cannot run grounded requests at all (no tool support), and caching")
+    print("  needs 2,048+ input tokens. Every lever in this model touches the ~1% of a")
+    print("  two-condition workload that is not the grounding SKU.")
 
     print("\nPer-request cost")
     print(f"  {'configuration':<38} {'$/request':>12}  {'vs naive':>9}")
@@ -125,7 +131,10 @@ def main() -> None:
     print("\nNotes")
     print("  - Token counts are measured from live runs, not estimated.")
     print("  - Batch trades up to 24h turnaround for ~50% off. A daily sweep can absorb that.")
-    print("  - Cache and batch discounts do not stack; the larger applies to cached tokens.")
+    print("  - Context caching is omitted: it needs >= 2,048 input tokens and the")
+    print(f"    measured workload is ~{PROFILES['thinking-off']['input']:.0f}. It cannot engage.")
+    print("  - Batch does NOT apply to grounded requests: batch prediction has no tool")
+    print("    support, so the grounded condition must run online at full rate.")
     print("  - Output dominates: it is ~7x the input rate and, with thinking on, ~14x the volume.")
     print("  - Throughput is not a constraint at these volumes. A 50,000-prompt day")
     print("    completes in under 4 minutes at the measured service capacity.")
