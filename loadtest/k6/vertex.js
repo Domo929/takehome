@@ -44,7 +44,7 @@ export default function () {
     contents: [{ role: 'user', parts: [{ text: buildQuestion(seq) }] }],
     systemInstruction: { role: 'user', parts: [{ text: SYSTEM_PROMPT }] },
     generationConfig: {
-      temperature: Number(__ENV.TEMPERATURE || 0.7),
+      temperature: Number(__ENV.TEMPERATURE || 1.0),
       maxOutputTokens: MAX_OUTPUT_TOKENS,
       // One spelling only: camelCase and snake_case map to the same protobuf oneof,
       // so sending both is a 400 rather than a merge. See FINDINGS 5.

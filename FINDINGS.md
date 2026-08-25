@@ -630,21 +630,53 @@ one. The test that falsified it is in `scripts/temperature_analysis.py` and runs
 against committed data, which is the only reason the error surfaced before submission
 rather than after.
 
-### 5. What to actually do
+### 5. The recommendation: 1.0
 
-1. **Do not sample at temperature 0.** It cannot express a share, and it hides a third
-   of the brands. This is the one setting that would silently break the product.
-2. **0.7 is defensible and 1.0 is marginally better.** Coverage keeps climbing to 1.4,
-   but drift plateaus around 0.052–0.057 from 0.7 upward, so the extra spread past 1.0
-   is buying variance rather than visibility. Anywhere in [0.7, 1.0] measures roughly
-   the same thing. The originally-inherited 0.7 was a guess that happened to land in a
-   reasonable place; this section is the check it never had.
-3. **Freeze it and version it with the results.** A brand time series that does not
-   record its temperature is two different measurements plotted on one axis.
-4. **The noise floor is ~5 percentage points**, measured directly as drift between two
-   independent 30-sample halves at the same temperature. Any brand movement smaller
-   than that is not a finding, and nothing in this repo would previously have told you
-   where that threshold sits.
+Counting brands whose rate lands in the informative 10–90% band, against the noise
+floor at each setting:
+
+| Temp | Informative brands | Noise floor | Ratio | Marginal gain |
+|---|---|---|---|---|
+| 0.00 | **0** | 0.015 | — | — |
+| 0.35 | 57 | 0.043 | 1,316 | +57 |
+| 0.70 | 74 | 0.052 | 1,429 | +17 |
+| **1.00** | **81** | 0.058 | 1,408 | **+7** |
+| 1.40 | 81 | 0.057 | 1,430 | **+0** |
+
+**The curve saturates at 1.0.** Gains per step run +57, +17, +7, then zero — 1.4 adds
+no informative brands over 1.0 while producing longer answers. Signal-to-noise is
+essentially flat from 0.35 up, so the ratio does not decide it; the marginal curve
+does.
+
+**1.0 over 0.7 is real but small.** Paired by category, 1.0 yields **+0.64 informative
+brands per category**, 95% CI [+0.09, +1.27]. That excludes zero, but only just, and
+per-category winners are scattered (0.35 wins 2 categories, 0.7 wins 3, 1.0 wins 2,
+1.4 wins 4). Anywhere in [0.7, 1.0] measures approximately the same thing.
+
+The tiebreaker is that **1.0 is Gemini 2.5 Flash's own default.** Running at the value
+the model ships with means not having to argue that a tuned-down setting preserves
+whatever calibration Google performed. 0.7 was inherited from the existing code and
+never justified; 1.0 is both the measured optimum and the path of least assumption.
+
+So: **temperature 1.0, explicitly set rather than left unset.** Explicit because
+`GenerateContentConfig()` leaves it `None` and the effective default lives
+server-side, where it can change under us without a code change — exactly the class of
+silent drift §5 documents for `thinking_budget`.
+
+### 6. What matters more than the exact value
+
+1. **Never sample at temperature 0.** It cannot express a share and it hides a third of
+   the brands. This is the one setting that would silently break the product, and it is
+   the setting a reasonable engineer would reach for wanting reproducibility.
+2. **Freeze it and version it with the results.** A brand time series that does not
+   record its temperature is two different measurements plotted on one axis. Moving
+   from 0.7 to 1.0 will itself shift historical comparisons, so the change wants a
+   re-baseline rather than a silent rollout.
+3. **The noise floor is ~5 percentage points**, measured as drift between two
+   independent 30-sample halves at the same setting. Any brand movement smaller than
+   that is not a finding. Nothing in this repo would previously have told you where
+   that threshold sits, and reporting a 3-point move as a trend is the easiest mistake
+   this product can make.
 
 Temperature is now per call on the provider, `--temperature` on the harness,
 `TEMPERATURE` in both k6 scripts, and recorded in every run manifest.

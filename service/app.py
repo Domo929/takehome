@@ -74,7 +74,9 @@ from llm.metrics import (
 class AskRequest(BaseModel):
     question: str = Field(..., max_length=8000)
     system_prompt: str = "You are a market research assistant. Answer concisely."
-    temperature: float = 0.7
+    # Measured optimum and the model's own default (FINDINGS 0e). Set explicitly
+    # rather than left unset: the effective default lives server-side.
+    temperature: float = 1.0
     # Per request, because the two measurement conditions run over the same prompts
     # and should share one connection pool. None means "use the service default".
     grounded: bool | None = None

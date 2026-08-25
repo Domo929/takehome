@@ -114,7 +114,7 @@ async def main_async(args: argparse.Namespace) -> int:
         result = await provider.ask_generic_question(
             "You are a market research assistant. Answer concisely.",
             args.question,
-            0.7,
+            1.0,
         )
     except LLMAuthenticationError as exc:
         print(f"\nAUTH FAILED: {exc}")

@@ -103,7 +103,7 @@ async def run_condition(
         async with sem:
             t0 = time.perf_counter()
             try:
-                r = await provider.ask_generic_question(p.system, p.question, 0.7)
+                r = await provider.ask_generic_question(p.system, p.question, 1.0)
             except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
                 rows.append({"prompt_id": p.id, "condition": name, "error": repr(exc)})
                 return

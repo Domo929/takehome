@@ -49,7 +49,9 @@ The four that most changed what I would build:
 - **Dynamic thinking is the SDK default and costs ~4x.** §4
 - **`temperature=0` cannot express a brand share.** Across 11 categories, not one
   brand in 103 landed between a 10% and 90% mention rate — every brand reads as always
-  or never. It also finds ~35% fewer brands, in every category tested. §0e
+  or never. It also finds ~35% fewer brands, in every category tested. The measured
+  optimum is **1.0**, which is also the model's own default; the repo previously used
+  an inherited 0.7. §0e
 
 Reproduce any ratio without spending anything:
 

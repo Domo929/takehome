@@ -248,7 +248,7 @@ async def _one_request(
     prompt: Prompt,
     governor: CostGovernor,
     *,
-    temperature: float = 0.7,
+    temperature: float = 1.0,
     # perf_counter instant this request was *due*, in open-loop mode. 0.0 means
     # closed loop, where there is no schedule to fall behind.
     scheduled_at: float = 0.0,
@@ -308,7 +308,7 @@ async def run_closed_loop(
     provider: LLM, prompts: list[Prompt], governor: CostGovernor,
     *, concurrency: int, requests: int | None = None, duration_s: float | None = None,
     label: str, progress_every_s: float = 30.0, warmup_s: float = 0.0,
-    temperature: float = 0.7,
+    temperature: float = 1.0,
 ) -> StageResult:
     """Hold ``concurrency`` requests in flight.
 
@@ -389,7 +389,7 @@ def _print_progress(stage: StageResult, elapsed: float) -> None:
 
 async def run_open_loop(
     provider: LLM, prompts: list[Prompt], governor: CostGovernor,
-    *, arrival_rate: float, duration_s: float, label: str, temperature: float = 0.7,
+    *, arrival_rate: float, duration_s: float, label: str, temperature: float = 1.0,
 ) -> StageResult:
     """Dispatch at a fixed rate regardless of completions.
 
@@ -465,9 +465,9 @@ def parse_args() -> argparse.Namespace:
              "TOGETHER_MODEL, and ignores the Gemini-specific flags below.",
     )
     p.add_argument(
-        "--temperature", type=float, default=0.7,
-        help="Sampling temperature. 0.7 is a convention, not a measured choice - "
-             "see FINDINGS 9.",
+        "--temperature", type=float, default=1.0,
+        help="Sampling temperature. 1.0 is measured, not inherited - see FINDINGS 0e. "
+             "Never 0: it cannot express a brand share.",
     )
     p.add_argument("--complex-fraction", type=float, default=0.0)
     p.add_argument(

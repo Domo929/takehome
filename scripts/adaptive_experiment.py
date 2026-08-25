@@ -96,9 +96,9 @@ async def drive(provider: Gemini, result: Result, offered: int, stop: asyncio.Ev
         try:
             if sem is not None:
                 async with sem:
-                    await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+                    await provider.ask_generic_question(SYSTEM, QUESTION, 1.0)
             else:
-                await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+                await provider.ask_generic_question(SYSTEM, QUESTION, 1.0)
             result.ok += 1
             result.latencies.append(time.perf_counter() - started)
         except LLMError:

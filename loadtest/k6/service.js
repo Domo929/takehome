@@ -45,7 +45,7 @@ export default function () {
   const payload = JSON.stringify({
     question: buildQuestion(seq),
     system_prompt: SYSTEM_PROMPT,
-    temperature: Number(__ENV.TEMPERATURE || 0.7),
+    temperature: Number(__ENV.TEMPERATURE || 1.0),
     ...(GROUNDED ? { grounded: true } : {}),
   });
 
