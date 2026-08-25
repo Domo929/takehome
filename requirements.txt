@@ -10,6 +10,11 @@ h2>=4.0.0
 
 # instrumentation
 prometheus-client>=0.26.0
+# structlog over a hand-rolled JSON formatter: Sentry/Datadog/OTel all ship
+# processors for it, so error-tracking is a chain entry rather than a rewrite.
+structlog>=25.0.0
+# .env parsing. Hand-rolled first; python-dotenv got export= and quoting right.
+python-dotenv>=1.0.0
 
 # fake Vertex endpoint used for $0 harness validation
 fastapi>=0.141.0

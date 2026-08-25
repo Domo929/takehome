@@ -55,7 +55,7 @@ from llm.errors import (
 )
 from llm.gemini import Gemini
 from llm.logging_setup import configure as configure_logging
-from llm.logging_setup import log_failure
+from llm.logging_setup import get_logger, log_failure
 from llm.metrics import (
     REGISTRY,
     EventLoopLagMonitor,
@@ -116,7 +116,7 @@ class ServiceState:
 
 
 state = ServiceState()
-logger = logging.getLogger("service")
+logger = get_logger("service")
 
 
 @asynccontextmanager
@@ -159,7 +159,8 @@ async def lifespan(app: FastAPI):
         state.draining = True
         logger.warning(
             "draining on signal",
-            extra={"signal": signal.Signals(sig).name, "inflight": state.inflight},
+            signal=signal.Signals(sig).name,
+            inflight=state.inflight,
         )
 
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -171,11 +172,9 @@ async def lifespan(app: FastAPI):
 
     logger.info(
         "service ready",
-        extra={
-            "capacity": state.capacity,
-            "adaptive": state.provider.limiter is not None,
-            **state.provider.describe(),
-        },
+        capacity=state.capacity,
+        adaptive=state.provider.limiter is not None,
+        **state.provider.describe(),
     )
 
     yield
@@ -184,9 +183,9 @@ async def lifespan(app: FastAPI):
     while state.inflight > 0 and time.monotonic() < deadline:
         await asyncio.sleep(0.1)
     if state.inflight:
-        logger.warning("drain timed out", extra={"abandoned": state.inflight})
+        logger.warning("drain timed out", abandoned=state.inflight)
     else:
-        logger.info("drained cleanly", extra={"spent_usd": round(state.spent_usd, 6)})
+        logger.info("drained cleanly", spent_usd=round(state.spent_usd, 6))
     await state.lag.stop()
 
 

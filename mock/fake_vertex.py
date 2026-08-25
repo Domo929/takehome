@@ -31,7 +31,7 @@ import asyncio
 import os
 import random
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -161,6 +161,9 @@ def create_app(behavior: Behavior | None = None) -> FastAPI:
         state.peak_inflight = 0
         state.total_requests = 0
         state.responses_by_kind = {}
+        # Injected failure modes reset too. Without this a caller that configures a
+        # failure and then dies leaves it set for everyone after it.
+        state.behavior = replace(behavior)
         return {"ok": True}
 
     # Vertex and the developer API use different path shapes; accept both so one

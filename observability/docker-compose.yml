@@ -1,7 +1,6 @@
 services:
   prometheus:
     image: prom/prometheus:v3.1.0
-    container_name: takehome-prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -22,7 +21,6 @@ services:
 
   grafana:
     image: grafana/grafana:11.6.0
-    container_name: takehome-grafana
     depends_on:
       - prometheus
     ports:
@@ -33,23 +31,10 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
       GF_USERS_DEFAULT_THEME: dark
-      # Points Grafana at the sidecar renderer so /render/... produces PNGs.
-      GF_RENDERING_SERVER_URL: http://renderer:8081/render
-      GF_RENDERING_CALLBACK_URL: http://grafana:3000/
-      GF_LOG_FILTERS: rendering:debug
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
-
-  # Renders dashboards to PNG so evidence can be committed as files rather than
-  # living only in a running Grafana. Regenerate with scripts/capture_dashboards.sh.
-  renderer:
-    image: grafana/grafana-image-renderer:3.11.6
-    container_name: takehome-renderer
-    environment:
-      ENABLE_METRICS: "false"
-      RENDERING_MODE: default
 
 volumes:
   prometheus-data:

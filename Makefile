@@ -70,12 +70,12 @@ calibrate: ## Measure the test rig's own ceiling (must be >> any real experiment
 	@curl -s -X POST http://127.0.0.1:8088/__configure -H 'Content-Type: application/json' \
 		-d '{"base_latency_s":0,"per_output_token_s":0,"knee_concurrency":1000000,"saturation_concurrency":1000000}' >/dev/null
 	@curl -s -X POST http://127.0.0.1:8088/__reset >/dev/null
-	TARGET=mock SCENARIO=calibrate $(K6) run --quiet loadtest/k6/gemini.js
+	TARGET=mock SCENARIO=calibrate $(K6) run --quiet loadtest/k6/vertex.js
 
 auth-check: ## Prove token fetches are O(VUs), not O(requests)
 	@curl -s -X POST http://127.0.0.1:8088/__reset >/dev/null
 	TARGET=mock AUTH=sidecar SCENARIO=constant RATE=200 DURATION=30s MAX_VUS=300 \
-		$(K6) run --quiet loadtest/k6/gemini.js
+		$(K6) run --quiet loadtest/k6/vertex.js
 	@echo "token fetches should equal VU count, not request count:"
 	@curl -s http://127.0.0.1:8099/__stats
 
@@ -87,18 +87,19 @@ service-down: ## Stop the integration service
 	@pid=$$(ss -lptnH 'sport = :8000' 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1); \
 	if [ -n "$$pid" ]; then kill $$pid && echo "stopped $$pid"; else echo "not running"; fi
 
-overhead: ## A/B: through our service vs direct to backend
-	@for T in mock service; do \
-		echo "--- k6 -> $$T ---"; \
-		TARGET=$$T SCENARIO=constant RATE=50 DURATION=30s MAX_VUS=400 \
-			$(K6) run --quiet loadtest/k6/gemini.js 2>&1 | grep -E "p50=|requests="; \
-	done
+overhead: ## A/B: through our service vs straight to the same backend
+	@echo "--- k6 -> backend direct ---"
+	@TARGET=mock SCENARIO=constant RATE=50 DURATION=30s MAX_VUS=400 \
+		$(K6) run --quiet loadtest/k6/vertex.js 2>&1 | grep -E "p50=|requests="
+	@echo "--- k6 -> our service -> same backend ---"
+	@SCENARIO=constant RATE=50 DURATION=30s MAX_VUS=400 \
+		$(K6) run --quiet loadtest/k6/service.js 2>&1 | grep -E "p50=|requests="
 
 capacity: ## Find where our service sheds load
 	@for R in 100 200 300 400; do \
 		echo "--- offered $$R rps ---"; \
-		TARGET=service SCENARIO=constant RATE=$$R DURATION=20s MAX_VUS=1200 \
-			$(K6) run --quiet loadtest/k6/gemini.js 2>&1 | grep -E "p50=|requests="; \
+		SCENARIO=constant RATE=$$R DURATION=20s MAX_VUS=1200 \
+			$(K6) run --quiet loadtest/k6/service.js 2>&1 | grep -E "p50=|requests="; \
 	done
 
 logprobs: ## Measure what logprobs add on top of 100-sample counting
@@ -123,15 +124,15 @@ runs: ## List recorded runs with their dashboard links
 	print('no runs recorded yet') if not rows else [print(f\"{r['label']:<44} {r['duration_s']:>6.1f}s  http://localhost:3000/d/takehome-overview/?from={r['from_ms']}&to={r['to_ms']}\") for r in rows[-15:]]"
 
 k6-smoke: ## k6 smoke test against the mock
-	TARGET=mock SCENARIO=smoke $(K6) run --quiet loadtest/k6/gemini.js
+	TARGET=mock SCENARIO=smoke $(K6) run --quiet loadtest/k6/vertex.js
 
 k6-constant: ## k6 constant arrival rate against the mock, into Prometheus
 	$(K6_PROM) TARGET=mock SCENARIO=constant RATE=20 DURATION=60s \
-		$(K6) run --quiet --out experimental-prometheus-rw loadtest/k6/gemini.js
+		$(K6) run --quiet --out experimental-prometheus-rw loadtest/k6/service.js
 
 k6-ramp: ## k6 step ramp to find the knee, into Prometheus
 	$(K6_PROM) TARGET=mock SCENARIO=ramp \
-		$(K6) run --quiet --out experimental-prometheus-rw loadtest/k6/gemini.js
+		$(K6) run --quiet --out experimental-prometheus-rw loadtest/k6/service.js
 
 clean: ## Remove generated results
 	rm -rf results/*.jsonl results/*.json

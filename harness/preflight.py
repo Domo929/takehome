@@ -21,6 +21,8 @@ import argparse
 import asyncio
 import os
 import pathlib
+
+from dotenv import dotenv_values, load_dotenv
 import sys
 import time
 
@@ -32,22 +34,24 @@ ENV_FILE = ".env.local"
 
 
 def load_env_file(path: str = ENV_FILE) -> list[str]:
-    """Load KEY=VALUE lines from an untracked env file. Returns the keys loaded."""
+    """Load an untracked env file into the environment. Returns the keys loaded.
+
+    `override=False` so a real exported variable always beats the file. That ordering
+    matters: CI and the shell are the authoritative sources, and a stale `.env.local`
+    silently winning over an explicit export is a confusing way to run against the
+    wrong project.
+
+    This was hand-rolled first. Replaced after comparing against python-dotenv on the
+    same input, where the hand-rolled version got three things wrong: `export KEY=val`
+    produced a key literally named "export KEY", `KEY=` was dropped instead of set
+    empty, and `.strip('"')` mangled any value containing quotes rather than failing.
+    """
     p = pathlib.Path(path)
     if not p.exists():
         return []
-    loaded = []
-    for line in p.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and value:
-            os.environ.setdefault(key, value)
-            loaded.append(key)
-    return loaded
+    parsed = dotenv_values(p)
+    load_dotenv(p, override=False)
+    return [k for k in parsed if k]
 
 
 def mask(value: str | None) -> str:
@@ -66,11 +70,12 @@ async def main_async(args: argparse.Namespace) -> int:
     print("\nCredentials")
     if backend == "developer":
         key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-        print(f"  backend            developer (Gemini API)")
-        print(f"  GOOGLE_API_KEY     {mask(key)}")
         if not key:
+            print("  backend            developer (Gemini API)")
             print("\nNo API key found. Put GOOGLE_API_KEY=... in .env.local or export it.")
             return 2
+        print("  backend            developer (Gemini API)")
+        print(f"  GOOGLE_API_KEY     {mask(key)}")
     else:
         print(f"  backend            vertex")
         print(f"  GOOGLE_CLOUD_PROJECT   {os.getenv('GOOGLE_CLOUD_PROJECT') or 'unset'}")

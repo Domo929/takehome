@@ -37,13 +37,13 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 
-from .logging_setup import log_failure
+from .logging_setup import get_logger, log_failure
 
 # The SDK logs an automatic-function-calling advisory on every generate_content call.
 # We pass no tools, so it is pure noise that would drown a load-test log.
 logging.getLogger("google_genai.models").setLevel(logging.ERROR)
 
-logger = logging.getLogger("llm.gemini")
+logger = get_logger("llm.gemini")
 
 from .adaptive import AdaptiveConfig, AdaptiveLimiter, Outcome
 from .errors import (
@@ -55,7 +55,6 @@ from .errors import (
     LLMRateLimitError,
     LLMServerError,
 )
-from .llm import LLM
 from .llm import LLM, FinishReason
 from .metrics import (
     adaptive_baseline_rtt,
@@ -108,6 +107,38 @@ def _env_float(name: str, default: float) -> float:
         return float(raw)
     except ValueError:
         return default
+
+
+def _build_vertex_client(
+    *, project: str | None, location: str | None, api_key: str | None, http_options: Any
+) -> tuple[genai.Client, str]:
+    resolved_project = project or os.getenv("GOOGLE_CLOUD_PROJECT")
+    if not resolved_project:
+        raise ValueError(
+            "Vertex backend requires a project: set GOOGLE_CLOUD_PROJECT or pass project=."
+        )
+    # Region is not cosmetic. It selects a distinct quota pool and distinct serving
+    # capacity, so latency and throughput measured in one region do not transfer to
+    # another (FINDINGS 4). Evertune runs in us-central1.
+    resolved_location = location or os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    client = genai.Client(
+        vertexai=True,
+        project=resolved_project,
+        location=resolved_location,
+        http_options=http_options,
+    )
+    return client, resolved_location
+
+
+def _build_developer_client(
+    *, project: str | None, location: str | None, api_key: str | None, http_options: Any
+) -> tuple[genai.Client, str]:
+    resolved_key = api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if not resolved_key:
+        raise ValueError(
+            "Developer backend requires an API key: set GOOGLE_API_KEY or pass api_key=."
+        )
+    return genai.Client(api_key=resolved_key, http_options=http_options), "developer-api"
 
 
 def _coerce_finish_reason(raw: Any) -> FinishReason:
@@ -213,32 +244,10 @@ class Gemini(LLM):
             # are visible to metrics.
         )
 
-        if self._backend == "vertex":
-            resolved_project = project or os.getenv("GOOGLE_CLOUD_PROJECT")
-            # us-central1 rather than "global": Evertune runs there, and region is
-            # not a cosmetic setting. It selects a distinct quota pool and a distinct
-            # set of serving capacity, so latency and throughput measured in one
-            # region do not transfer to another.
-            resolved_location = location or os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
-            if not resolved_project:
-                raise ValueError(
-                    "Vertex backend requires a project: set GOOGLE_CLOUD_PROJECT or pass project=."
-                )
-            self._client = genai.Client(
-                vertexai=True,
-                project=resolved_project,
-                location=resolved_location,
-                http_options=http_options,
-            )
-            self._location = resolved_location
-        else:
-            resolved_key = api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-            if not resolved_key:
-                raise ValueError(
-                    "Developer backend requires an API key: set GOOGLE_API_KEY or pass api_key=."
-                )
-            self._client = genai.Client(api_key=resolved_key, http_options=http_options)
-            self._location = "developer-api"
+        builder = _build_vertex_client if self._backend == "vertex" else _build_developer_client
+        self._client, self._location = builder(
+            project=project, location=location, api_key=api_key, http_options=http_options
+        )
 
         pool_size.labels(provider=_PROVIDER).set(self._max_connections)
         self._inflight = 0
@@ -440,12 +449,10 @@ class Gemini(LLM):
             grounding_degraded_total.labels(provider=_PROVIDER, model=self._model).inc()
             logger.warning(
                 "grounding requested but absent from response",
-                extra={
-                    "provider": _PROVIDER,
-                    "model": self._model,
-                    "location": self._location,
-                    "finish_reason": str(finish_reason),
-                },
+                provider=_PROVIDER,
+                model=self._model,
+                location=self._location,
+                finish_reason=str(finish_reason),
             )
 
         return LLM.SimpleResponse(
@@ -514,6 +521,125 @@ class Gemini(LLM):
     def supports_grounding(self) -> bool:
         return True
 
+    def _request_config(
+        self, system_prompt: str, temperature: float, grounded: bool
+    ) -> types.GenerateContentConfig:
+        return types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=temperature,
+            max_output_tokens=self._max_output_tokens,
+            thinking_config=types.ThinkingConfig(thinking_budget=self._thinking_budget),
+            tools=[types.Tool(google_search=types.GoogleSearch())] if grounded else None,
+        )
+
+    def _log_retry(self, err: LLMError, delay: float, attempt: int) -> None:
+        retry_attempts_total.labels(provider=_PROVIDER, reason=err.error_class).inc()
+        # WARNING, not ERROR: a retried request has not failed yet. Worth seeing
+        # because a rising retry rate precedes real failure.
+        logger.warning(
+            "retrying",
+            reason=err.error_class,
+            provider=_PROVIDER,
+            model=self._model,
+            location=self._location,
+            attempt=attempt,
+            backoff_s=round(delay, 3),
+            status_code=getattr(err, "status_code", None),
+            retry_after_s=getattr(err, "retry_after_s", None),
+            detail=str(err)[:200],
+        )
+
+    def _reject_unusable(self, parsed: LLM.SimpleResponse) -> None:
+        """Raise on a billed 200 that carried no usable answer.
+
+        Nothing else in the stack treats this as an error, which is exactly how a
+        system ends up silently dropping a slice of its answers.
+        """
+        empty_responses_total.labels(
+            provider=_PROVIDER,
+            model=self._model,
+            finish_reason=parsed.finish_reason.value,
+        ).inc()
+        # Tokens were billed even though nothing usable came back, so the spend is
+        # recorded before deciding whether to retry.
+        self._record(parsed, outcome="empty")
+        logger.warning(
+            "unusable response",
+            provider=_PROVIDER,
+            model=self._model,
+            location=self._location,
+            finish_reason=parsed.finish_reason.value,
+            input_tokens=parsed.input_tokens,
+            output_tokens=parsed.output_tokens,
+            thinking_tokens=parsed.thinking_tokens,
+            cost_usd=parsed.cost_usd,
+            billed_but_unusable=True,
+        )
+        if parsed.finish_reason in _BLOCKED_REASONS:
+            raise LLMContentBlockedError(
+                f"blocked: {parsed.finish_reason.value}", provider=_PROVIDER
+            )
+        # An empty 200 is invisible to transport-level retry; only response validation
+        # catches it, so it is raised here to re-enter backoff.
+        raise LLMEmptyResponseError(
+            f"empty response (finish_reason={parsed.finish_reason.value})",
+            provider=_PROVIDER,
+        )
+
+    async def _attempt_once(
+        self,
+        question: str,
+        config: types.GenerateContentConfig,
+        grounded: bool,
+        outcome: RetryOutcome,
+    ) -> LLM.SimpleResponse:
+        """One vendor call. Raises on anything not usable, so retry can see it."""
+        self._inflight += 1
+        inflight_requests.labels(provider=_PROVIDER).set(self._inflight)
+        pool_saturation_ratio.labels(provider=_PROVIDER).set(
+            self._inflight / self._max_connections
+        )
+        started = time.perf_counter()
+        try:
+            raw = await self._client.aio.models.generate_content(
+                model=self._model, contents=question, config=config
+            )
+        except Exception as exc:
+            # The failed attempt's wall time is vendor time: it was spent waiting on
+            # them. Omitting it would resurface as our overhead in the caller's
+            # latency decomposition.
+            elapsed = time.perf_counter() - started
+            outcome.upstream_s += elapsed
+            translated = self._translate(exc)
+            if grounded:
+                # A grounded attempt that reached the vendor may have run its search
+                # before failing, and search bills per prompt regardless of whether
+                # generation completed. We cannot tell from here, so assume the
+                # expensive case: ungrounded this is rounding error, grounded it is
+                # ~88x the token cost, up to four attempts deep.
+                fee = grounding_cost_usd(1)
+                outcome.unbilled_cost_usd += fee
+                unbilled_attempt_cost_usd.labels(
+                    provider=_PROVIDER, model=self._model
+                ).inc(fee)
+            self._observe(translated, elapsed)
+            raise translated from exc
+        finally:
+            self._inflight -= 1
+            inflight_requests.labels(provider=_PROVIDER).set(self._inflight)
+            pool_saturation_ratio.labels(provider=_PROVIDER).set(
+                self._inflight / self._max_connections
+            )
+
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        outcome.upstream_s += latency_ms / 1000.0
+        self._observe(None, latency_ms / 1000.0)
+        parsed = self._parse(raw, latency_ms, outcome.attempts, grounded)
+        if not parsed.answer:
+            self._reject_unusable(parsed)
+        self._record(parsed, outcome="success")
+        return parsed
+
     async def ask_generic_question(
         self,
         system_prompt: str,
@@ -524,142 +650,27 @@ class Gemini(LLM):
     ) -> LLM.SimpleResponse:
         """Ask one question, optionally with live web search.
 
-        ``grounded`` is per call rather than per instance because the two conditions
-        are measured on the same prompts. One provider means one connection pool, one
-        retry budget and one cost ledger across both; two instances would halve the
-        effective pool and double the TLS handshakes, which -- see FINDINGS 6h -- is
-        where our throughput actually goes.
+        `grounded` is per call rather than per instance because both measurement
+        conditions run over the same prompts. One provider instance then means one
+        connection pool, one retry budget and one cost ledger across both; two
+        instances would halve the effective pool and double TLS handshakes, which per
+        FINDINGS 6h is where our throughput actually goes.
 
-        ``None`` means "use the instance default", which is how the environment
-        configures it. Passing an explicit bool always wins.
+        `None` means "use the instance default", which is how the environment
+        configures it. An explicit bool always wins.
         """
         use_grounding = self._grounded if grounded is None else grounded
-        if use_grounding and not self.supports_grounding():
-            raise NotImplementedError("grounding is not available on this backend")
-
-        config = types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=temperature,
-            max_output_tokens=self._max_output_tokens,
-            thinking_config=types.ThinkingConfig(thinking_budget=self._thinking_budget),
-            tools=(
-                [types.Tool(google_search=types.GoogleSearch())]
-                if use_grounding
-                else None
-            ),
-        )
-
+        config = self._request_config(system_prompt, temperature, use_grounding)
         outcome_tracker = RetryOutcome()
-
-        def _on_retry(err: LLMError, delay: float, attempt: int) -> None:
-            retry_attempts_total.labels(provider=_PROVIDER, reason=err.error_class).inc()
-            # Logged at WARNING, not ERROR: a retried request has not failed yet. It
-            # is worth seeing because a rising retry rate precedes real failure.
-            logger.warning(
-                "retrying after %s",
-                err.error_class,
-                extra={
-                    "provider": _PROVIDER,
-                    "model": self._model,
-                    "location": self._location,
-                    "attempt": attempt,
-                    "backoff_s": round(delay, 3),
-                    "status_code": getattr(err, "status_code", None),
-                    "retry_after_s": getattr(err, "retry_after_s", None),
-                    "detail": str(err)[:200],
-                },
-            )
-
-        async def _attempt() -> LLM.SimpleResponse:
-            self._inflight += 1
-            inflight_requests.labels(provider=_PROVIDER).set(self._inflight)
-            pool_saturation_ratio.labels(provider=_PROVIDER).set(
-                self._inflight / self._max_connections
-            )
-            started = time.perf_counter()
-            try:
-                raw = await self._client.aio.models.generate_content(
-                    model=self._model, contents=question, config=config
-                )
-            except Exception as exc:
-                # Count the failed attempt's wall time as vendor time. It was spent
-                # waiting on them, and omitting it would silently reappear as our
-                # overhead in the caller's decomposition.
-                elapsed = time.perf_counter() - started
-                outcome_tracker.upstream_s += elapsed
-                translated = self._translate(exc)
-                if use_grounding:
-                    # A grounded attempt that reached the vendor may have run its
-                    # search before failing, and search bills per prompt regardless of
-                    # whether generation completed. We cannot tell from here, so we
-                    # assume the expensive case. Ungrounded this would be rounding
-                    # error; grounded it is ~88x the token cost, four attempts deep.
-                    fee = grounding_cost_usd(1)
-                    outcome_tracker.unbilled_cost_usd += fee
-                    unbilled_attempt_cost_usd.labels(
-                        provider=_PROVIDER, model=self._model
-                    ).inc(fee)
-                self._observe(translated, elapsed)
-                raise translated from exc
-            finally:
-                self._inflight -= 1
-                inflight_requests.labels(provider=_PROVIDER).set(self._inflight)
-                pool_saturation_ratio.labels(provider=_PROVIDER).set(
-                    self._inflight / self._max_connections
-                )
-
-            latency_ms = (time.perf_counter() - started) * 1000.0
-            outcome_tracker.upstream_s += latency_ms / 1000.0
-            self._observe(None, latency_ms / 1000.0)
-            parsed = self._parse(
-                raw, latency_ms, outcome_tracker.attempts, use_grounding
-            )
-
-            if not parsed.answer:
-                empty_responses_total.labels(
-                    provider=_PROVIDER,
-                    model=self._model,
-                    finish_reason=parsed.finish_reason.value,
-                ).inc()
-                # Tokens were still billed even though we got nothing usable, so the
-                # spend is recorded before deciding whether to retry.
-                self._record(parsed, outcome="empty")
-
-                # HTTP 200 with no usable text. Logged because nothing else in the
-                # stack treats this as an error, which is exactly why it is easy to
-                # ship a system that silently drops a slice of its answers.
-                logger.warning(
-                    "unusable response",
-                    extra={
-                        "provider": _PROVIDER,
-                        "model": self._model,
-                        "location": self._location,
-                        "finish_reason": parsed.finish_reason.value,
-                        "input_tokens": parsed.input_tokens,
-                        "output_tokens": parsed.output_tokens,
-                        "thinking_tokens": parsed.thinking_tokens,
-                        "cost_usd": parsed.cost_usd,
-                        "billed_but_unusable": True,
-                    },
-                )
-                if parsed.finish_reason in _BLOCKED_REASONS:
-                    raise LLMContentBlockedError(
-                        f"blocked: {parsed.finish_reason.value}",
-                        provider=_PROVIDER,
-                    )
-                # An empty 200 is invisible to transport-level retry; only response
-                # validation can catch it, so it is raised here to re-enter backoff.
-                raise LLMEmptyResponseError(
-                    f"empty response (finish_reason={parsed.finish_reason.value})",
-                    provider=_PROVIDER,
-                )
-
-            self._record(parsed, outcome="success")
-            return parsed
 
         try:
             result = await with_retries(
-                _attempt, self._retry_policy, outcome=outcome_tracker, on_retry=_on_retry
+                lambda: self._attempt_once(
+                    question, config, use_grounding, outcome_tracker
+                ),
+                self._retry_policy,
+                outcome=outcome_tracker,
+                on_retry=self._log_retry,
             )
         except LLMError as err:
             requests_total.labels(

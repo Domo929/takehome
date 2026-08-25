@@ -1,16 +1,23 @@
-// k6 scenario definitions.
+// k6 scenario definitions, shared by service.js and vertex.js.
 //
-// Every scenario uses an arrival-rate executor rather than a VU-count executor. That
-// is the whole point of running k6 alongside the Python harness: arrival-rate
-// executors dispatch on a wall-clock schedule regardless of whether earlier requests
-// have returned, so a slowdown shows up as latency and queue growth instead of
-// silently reducing the offered load.
+// A VU (virtual user) is k6's unit of concurrency: one slot that issues a request,
+// waits for the response, then issues the next. Each runs in its own isolated JS
+// runtime.
 //
-// preAllocatedVUs is sized generously. If k6 runs out of VUs it starts dropping
-// iterations, and dropped_iterations is then the signal that the *generator*, not the
-// service, is the constraint. That metric is watched deliberately.
+// Every scenario here uses an ARRIVAL-RATE executor rather than a VU-count executor,
+// and that choice is the reason these numbers can be trusted. An arrival-rate
+// executor dispatches on a wall-clock schedule regardless of whether earlier requests
+// have returned, so a slowdown surfaces as latency and queue growth. A VU-count
+// executor would instead issue fewer requests when the system slows - coordinated
+// omission, the most common way a load test flatters what it measures.
 //
-// Pick one with: k6 run --env SCENARIO=ramp loadtest/k6/gemini.js
+// VUs are still allocated, but as a pool the schedule draws from rather than as the
+// thing being held constant. preAllocatedVUs is sized generously: if k6 runs out it
+// drops iterations, and dropped_iterations then means the GENERATOR was the
+// constraint, which makes every other number an understatement. Both scripts report
+// it for exactly that reason.
+//
+// Pick one with: k6 run --env SCENARIO=ramp loadtest/k6/service.js
 
 const SCENARIO = __ENV.SCENARIO || 'smoke';
 const RATE = Number(__ENV.RATE || 5);

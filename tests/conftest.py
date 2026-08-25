@@ -76,6 +76,22 @@ def fake_vertex() -> Iterator[ServerHandle]:
 
 
 @pytest.fixture(autouse=True)
+def _reset_fake_vertex(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Restore mock defaults between tests.
+
+    The server is session-scoped for speed, which means a test that configures a
+    failure mode and then fails its assertion leaves that mode set for everything
+    after it. One real failure then reads as a dozen, and the actual cause is buried.
+    """
+    yield
+    if "fake_vertex" in request.fixturenames:
+        try:
+            request.getfixturevalue("fake_vertex").reset()
+        except Exception:
+            pass
+
+
+@pytest.fixture(autouse=True)
 def _fake_adc(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub Application Default Credentials.
 
