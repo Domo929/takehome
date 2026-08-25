@@ -29,7 +29,7 @@ def build(server, **kw) -> Gemini:
 
 
 async def test_grounding_is_off_unless_requested(fake_vertex):
-    """Grounding costs ~88x per request, so it must never be a silent default."""
+    """Grounding costs ~123x per request, so it must never be a silent default."""
     provider = build(fake_vertex)
     assert provider.describe()["grounded"] is False
 
@@ -55,7 +55,7 @@ async def test_grounded_request_carries_its_evidence(fake_vertex):
 
 
 async def test_grounded_request_is_billed_for_the_search_sku(fake_vertex):
-    """Token cost alone understates a grounded workload by roughly 88x.
+    """Token cost alone understates a grounded workload by roughly 123x.
 
     Grounding bills per prompt on a separate SKU. A cost model that counts only
     tokens would make a grounded sweep look affordable when it is the dominant line
@@ -133,7 +133,7 @@ async def test_failed_grounded_attempts_are_counted_against_the_budget(fake_vert
 
     Failed attempts carry no usage metadata, so the cost of a retried grounded request
     is invisible if only the successful attempt is counted. Ungrounded that is a
-    rounding error. Grounded, at ~88x the token cost and up to four attempts, it is the
+    rounding error. Grounded, at ~123x the token cost and up to four attempts, it is the
     difference between a spend breaker that works and one that reports a number it
     would like to be true.
     """

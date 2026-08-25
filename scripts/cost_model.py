@@ -48,7 +48,7 @@ PROFILES = {
     "thinking-dynamic": {"input": 35.3, "output": 458.3, "thinking": 368.6},
 }
 
-GROUNDING_USD_PER_1K = 25.0
+GROUNDING_USD_PER_1K = 35.0
 PRICE_IN = 0.30
 PRICE_OUT = 2.50
 BATCH_MULTIPLIER = 0.50

@@ -616,7 +616,7 @@ class Gemini(LLM):
                 # before failing, and search bills per prompt regardless of whether
                 # generation completed. We cannot tell from here, so assume the
                 # expensive case: ungrounded this is rounding error, grounded it is
-                # ~88x the token cost, up to four attempts deep.
+                # ~123x the token cost, up to four attempts deep.
                 fee = grounding_cost_usd(1)
                 outcome.unbilled_cost_usd += fee
                 unbilled_attempt_cost_usd.labels(

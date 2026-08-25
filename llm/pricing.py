@@ -72,12 +72,13 @@ def pricing_for(model: str | None) -> ModelPricing:
 
 
 # Google Search grounding bills per grounded prompt, on a separate SKU from tokens.
-# Published rates have appeared as both $14 and $25 per 1,000; the higher figure is
-# used so estimates are conservative rather than flattering. There is also a free
-# monthly allowance. VERIFY AGAINST A REAL INVOICE before relying on this: unlike the
-# token rates, this one is not measured here.
-GROUNDING_USD_PER_1K_PROMPTS = 25.0
-GROUNDING_FREE_PROMPTS_PER_MONTH = 5_000
+#
+# Verified against Google's Cloud Billing Catalog API rather than documentation:
+# service C7E2-9256-1C43 (Vertex AI), SKU F307-73C9-C204, "LLM Grounding with Google
+# Search tool - Predictions". Two tiers: free below 1,500 prompts, $0.035 each above.
+# Web sources claiming $14 or $25 per 1,000 are both wrong.
+GROUNDING_USD_PER_1K_PROMPTS = 35.0
+GROUNDING_FREE_PROMPTS_PER_MONTH = 1_500
 
 
 def grounding_cost_usd(grounded_prompts: int) -> float:

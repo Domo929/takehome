@@ -114,6 +114,23 @@ def main() -> None:
         d = by_account[acct]
         print(f"  {acct:<28} {d['runs']:>6} {d['requests']:>10,} {d['cost']:>12.4f}")
 
+    # Grounded runs were priced at $25/1k when their manifests were written; the SKU
+    # rate has since been verified at $35/1k (FINDINGS 0c). Reported as an adjustment
+    # rather than by rewriting manifests, which record what was believed at the time.
+    grounded = 0
+    for f in sorted((REPO / "results").rglob("*-manifest.json")):
+        try:
+            grounded += json.loads(f.read_text()).get("grounded_prompts_billed", 0)
+        except json.JSONDecodeError:
+            continue
+    if grounded:
+        print(f"\n  Grounding adjustment: {grounded} grounded prompts modelled at "
+              f"$25/1k = ${grounded * 0.025:.2f}")
+        print(f"    at the verified $35/1k they are ${grounded * 0.035:.2f}, so the "
+              f"total below understates by ${grounded * 0.010:.2f}")
+        print(f"    both may overstate: the SKU's first 1,500 prompts are free and only "
+              f"{grounded} were issued")
+
     evertune = by_account.get("Evertune (vertex)", {"cost": 0.0, "requests": 0})
     print(
         f"\n  Spent on Evertune's project: ${evertune['cost']:.4f} "

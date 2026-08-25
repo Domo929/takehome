@@ -125,11 +125,11 @@ them leaves either money or responsiveness on the table.
 
 | Report size | Requests (both conditions) | Ungrounded cost | **Grounded arm cost** | Total |
 |---|---|---|---|---|
-| 50 prompts | 10,000 | $1.44 | **$126.44** | **$127.88** |
-| **100 prompts** | **20,000** | **$2.88** | **$252.88** | **$255.76** |
-| 200 prompts | 40,000 | $5.77 | $505.77 | $511.54 |
+| 50 prompts | 10,000 | $1.44 | **$176.44** | **$177.88** |
+| **100 prompts** | **20,000** | **$2.88** | **$352.88** | **$355.76** |
+| 200 prompts | 40,000 | $5.77 | $705.77 | $711.54 |
 
-**One new 100-prompt report costs about $256, of which $253 is the grounding SKU.** My
+**One new 100-prompt report costs about $356, of which $350 is the grounding SKU.** My
 earlier version of this table said $2.88, because it counted only the ungrounded arm
 and only tokens. That was the largest single cost error in this document.
 
@@ -139,7 +139,7 @@ grounded arm dominates wall clock as well as spend.
 That burst is the scenario the admission control and retry budget in this repo exist
 for — not steady-state load, which is trivially served.
 
-**The correction that matters most:** at ~$256 per report, the interesting question is
+**The correction that matters most:** at ~$356 per report, the interesting question is
 no longer "how fast can we serve a report" but "does every prompt need the grounded
 condition, and how often does a report need refreshing". Those are product decisions
 that this measurement should inform, and they are worth more than any engineering
@@ -163,20 +163,20 @@ on a mixed cadence (20% daily, 50% weekly, 30% monthly):
 
 The table above is the **ungrounded arm only**, and it is the cheap arm. The grounded
 arm runs the same request volume with no Batch option and no caching, at the assumed
-$25/1k SKU:
+verified $35/1k SKU (§0c):
 
 | Reports | Grounded req/day | **Grounded cost/yr** | Ungrounded (Batch) | Grounded share |
 |---|---|---|---|---|
-| 50 | 140,714 | **$1,298,827** | $7,405 | 99.4% |
-| **200** | **562,857** | **$5,195,309** | **$29,619** | **99.4%** |
-| 1,000 | 2,814,286 | $25,976,544 | $148,093 | 99.4% |
+| 50 | 140,714 | **$1,812,417** | $7,405 | 99.6% |
+| **200** | **562,857** | **$7,249,666** | **$29,619** | **99.6%** |
+| 1,000 | 2,814,286 | $36,248,332 | $148,093 | 99.6% |
 
-**At 200 reports the scheduled tier costs roughly $5.2M/year, not $59K.** The $29,619
-Batch saving is real and worth taking, and it is **0.6%** of the bill.
+**At 200 reports the scheduled tier costs roughly $7.2M/year, not $59K.** The $29,619
+Batch saving is real and worth taking, and it is **0.4%** of the bill.
 
-Three caveats, because this is the largest number in the document and it is built on
-the shakiest input. The $25/1k rate is unconfirmed (§0c) — at $14 the total is $2.9M.
-The cadence mix is my assumption, not Evertune's. And most importantly, **nobody has
+Two caveats, because this is the largest number in the document. The $35/1k rate is now
+verified against Google's billing catalog (§0c), so it is no longer the weak link — but
+the cadence mix is still my assumption, not Evertune's. And most importantly, **nobody has
 said every scheduled refresh runs both conditions**; if the grounded condition runs
 monthly while the ungrounded runs daily, this collapses by an order of magnitude.
 
@@ -250,23 +250,34 @@ Thinking and grounding are unrelated:
 
 ### The cost consequence is severe
 
-Grounding bills per grounded prompt, not in tokens. At published rates (~$25 per
-1,000; some sources say $14 — **this needs confirming against a real invoice**):
+Grounding bills per grounded prompt, not in tokens. **Rate verified against Google's
+Cloud Billing Catalog API** — service `C7E2-9256-1C43`, SKU `F307-73C9-C204`, "LLM
+Grounding with Google Search tool - Predictions": free below 1,500 prompts, then
+**$0.035 each**.
 
 | | Per request | At 100 samples per prompt |
 |---|---|---|
 | Ungrounded | $0.000288 | $0.03 |
-| **Grounded** | **$0.025288** | **$2.53** |
-| Ratio | **88x** | 88x |
+| **Grounded** | **$0.035288** | **$3.53** |
+| Ratio | **123x** | 123x |
 
-*(Modelled at the assumed rate. Measured below the ratio came out at 63x, because
-grounded answers are longer and so carry more token cost of their own.)*
+> **Corrected 2026-08-25.** This table originally said $25 per 1,000 and a ratio of
+> 88x, taken from web sources that disagreed with each other ($14 vs $25). Neither is
+> right. Querying the Cloud Billing Catalog API directly gives **$35 per 1,000**, and a
+> free allowance of **1,500** prompts rather than the ~5,000 I had assumed. Every
+> grounded figure in this document is 40% higher than first reported.
+>
+> The same query confirmed the token rates were correct to the cent — input $0.30/1M,
+> output $2.50/1M, thinking billed at the output rate, cached input at $0.03/1M
+> (exactly the 10% discount modelled). So the check that corrected the one wrong number
+> also validated the four right ones, which is the useful property of going to an
+> authoritative source instead of documentation.
 
 **This inverts the cost model in §6c.** Every token lever there — thinking off, Batch
 API — discounts *tokens*, and context caching cannot engage at all below its
 2,048-token minimum. None of them touch the grounding SKU, and Batch cannot even run a
 grounded request. Once
-grounding is enabled, tokens are roughly 1% of the bill and the entire optimisation
+grounding is enabled, tokens are under 1% of the bill and the entire optimisation
 story becomes a rounding error.
 
 For a workload running 100 samples per prompt across both conditions, the grounded
@@ -292,7 +303,7 @@ token cap. Cost $0.52. Raw data in `results/real/grounding-*.jsonl`.
 | p95 latency | 3,256 ms | **10,076 ms** | 3.09x |
 | Truncated at 512 | 0 / 20 | **10 / 20** | 50% [30%, 70%] |
 | Answers carrying sources | 0 | 20 / 20 | — |
-| Modelled cost | $0.0082 | $0.5152 | 63x |
+| Modelled cost | $0.0082 | $0.7152 | 87x |
 
 ### Three things I got wrong, corrected by the measurement
 
@@ -365,15 +376,21 @@ reported to expire, so resolution has to happen at collection time or the proven
 is lost permanently. `grounding_sources` captures them; resolving them is not
 implemented and is listed in §9.
 
-### What is still unverified
+### The rate, now verified
 
-The $25/1k rate is still an assumption. This run billed 20 grounded prompts, which is
-recorded in the manifest specifically so it can be reconciled against the
-"Grounding with Google Search" SKU in the billing console. That reconciliation has not
-happened yet — it needs ~24h for billing to settle — and it is the one number here
-that comes from the open web rather than from measurement. If the real rate is $14,
-every grounded figure in this document drops by 44%; the engineering conclusions do
-not move.
+This was the one assumed number in the document. It has since been settled directly
+against Google's Cloud Billing Catalog API rather than waiting on an invoice, which
+turned out to be both faster and more precise: the catalog gives the exact SKU, its
+tier boundaries and its unit price.
+
+**$0.035 per grounded prompt above a 1,500-prompt free allowance.** Not $25/1k, not
+$14/1k. All grounded figures here were revised upward by 40% as a result, and the same
+query independently confirmed every token rate in `llm/pricing.py` to the cent.
+
+The remaining unverified piece is only whether the *free allowance resets monthly*,
+which the catalog's `aggregationInterval: DAILY` field makes ambiguous. At 1,500
+prompts it is 7.5 two-condition prompts at 100 samples, so it does not change any
+conclusion either way.
 
 ### What the code now does
 
@@ -414,7 +431,8 @@ not a parameter to tune, so the question is not "how many samples" but "what do 
 samples of one prompt actually look like".
 
 So I ran exactly one unit. Same prompt, 100 grounded + 100 ungrounded, concurrency 25,
-1,536-token cap, `us-central1`. **$2.67.** Raw data in
+1,536-token cap, `us-central1`. **$3.67 at verified rates** (billed $2.67 at the time, before the rate was
+corrected — see §0c). Raw data in
 `results/real/production-unit-*.jsonl`.
 
 | | Ungrounded | Grounded | |
@@ -427,7 +445,7 @@ So I ran exactly one unit. Same prompt, 100 grounded + 100 ungrounded, concurren
 | Rate-limited | 0 | **0** | — |
 | Retried | 0 | 0 | — |
 | Silently degraded | 0 | **0** | — |
-| Cost | $0.031 | **$2.638** | 86x |
+| Cost | $0.031 | **$3.638** | 118x |
 
 ### The product signal is large, and 100 samples makes it solid
 
@@ -525,7 +543,7 @@ retrieval, which is outside anyone's control.
 
 100 identical prompts issued 428 searches across 154 distinct query strings. Nothing
 was reused. A production unit costs the **full 100x** grounding SKU. Measured total was
-**$2.64 per prompt** — $2.53 of SKU plus $0.11 of tokens, the latter higher than
+**$3.64 per prompt** — $3.50 of SKU plus $0.14 of tokens, the latter higher than
 modelled because grounded answers run long — against **$0.031** for the ungrounded arm.
 
 ### 1,536 tokens is the right cap for grounded traffic
@@ -2165,11 +2183,20 @@ requests, roughly $0.08.
 
 </details>
 
-**Grounding rate reconciliation.** §0c billed 20 grounded prompts on 2026-08-24 and
-recorded the count in its manifest. Comparing that against the "Grounding with Google
-Search" SKU in the billing console settles $14 vs $25 and reveals whether the free
-monthly allowance (~5,000 prompts) applied first. Everything else in §0c is measured;
-this is the one assumed number.
+~~**Grounding rate reconciliation.**~~ **Settled, and the answer was neither figure.**
+Rather than wait for billing to land, I queried Google's Cloud Billing Catalog API —
+the same data the invoice is generated from. SKU `F307-73C9-C204` prices grounding at
+**$0.035 per prompt above a 1,500-prompt free allowance**, so both the $14 and $25
+figures circulating on the web are wrong and every grounded number here was 40% low.
+
+The same query confirmed all four token rates to the cent, including that thinking
+bills at the output rate and cached input at exactly 10%. `scripts/verify_pricing.py`
+makes this a repeatable check rather than a one-off, and exits non-zero on a mismatch.
+
+The lesson worth keeping: **the authoritative source was cheaper to consult than the
+approximation.** I spent §0c hedging a number that a single API call would have
+settled, and only went looking after the estimate had already propagated into four
+sections.
 
 ~~**Grounded output cap.**~~ **Answered in §0d:** 1,536 gives 1% truncation against
 50% at 512. Grounded answers average 549 output tokens versus 120 ungrounded.
