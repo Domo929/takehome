@@ -681,6 +681,68 @@ silent drift §5 documents for `thinking_budget`.
 Temperature is now per call on the provider, `--temperature` on the harness,
 `TEMPERATURE` in both k6 scripts, and recorded in every run manifest.
 
+### 7. Does the rest of this document need re-running at 1.0?
+
+Almost everything here was measured at 0.7, so the honest question is whether changing
+the recommendation invalidates it. **No — and the reason is checkable rather than
+asserted.**
+
+The sweep recorded output tokens at every temperature, which is the channel through
+which temperature could reach any other finding:
+
+| Temp | Mean output tokens | vs 0.7 | Would exceed 512 cap | Exceed 256 |
+|---|---|---|---|---|
+| 0.70 | 114.0 | — | 0.2% | 3.9% |
+| **1.00** | **119.8** | **+5.1%** | **0.2%** | 5.3% |
+
+Taking each class of finding in turn:
+
+**Throughput and capacity (§6d, §6f, §6g, §6h) — unaffected.** The workload is
+request-bound, not token-bound, which the concurrency sweep shows directly: both
+requests/s and output-tokens/s scale linearly together from c=8 to c=128 (4.2 → 73.7
+rps alongside 683 → 11,365 tok/s, at a flat ~205 tokens per request). A 5% shift in
+tokens per request cannot move a ceiling that §6g localised to TLS work on the event
+loop.
+
+**Cost ratios (§4, §6c) — unaffected. Absolute costs are 5% higher.** The 4.0x thinking
+result and the 8.0x lever spread are ratios in which both arms shift together. The
+per-request figures do move: **$0.000294 → $0.000309**, or $5,371/yr → $5,638/yr at
+50,000 ungrounded prompts/day. On a two-condition workload where the grounding SKU
+dominates (§0c), that delta is **0.06% of the bill**. Worth stating, not worth
+re-measuring.
+
+**Truncation (§6f, §0d) — unaffected.** At the 512-token cap, 0.2% of answers exceed it
+at both 0.7 and 1.0. At 1,536 it is 0% at every temperature. Only a 256-token cap
+shows a real difference (3.9% → 5.3%), and §6f already rejects 256.
+
+**Logprobs (§6e) — already ran at 1.0.** That experiment set temperature explicitly,
+because sampling is the mechanism it studies.
+
+**Grounding (§0c, §0d) — the comparison is controlled, and the signal dwarfs the
+shift.** Both arms ran at 0.7, so the grounded-vs-ungrounded delta is not confounded.
+The residual question is whether the *magnitudes* would differ at 1.0, and that is
+answerable for free: the production unit and the temperature sweep used the **same
+prompt** on the same category, so the sweep's 0.7 and 1.0 cells estimate the shift
+directly.
+
+| Brand | Prod unit @0.7 | Sweep @0.7 | Sweep @1.0 | Shift |
+|---|---|---|---|---|
+| Roborock / iRobot / Roomba | 100% | 100% | 100% | 0 |
+| Eufy | 65% | 73% | 70% | −3 |
+| Ecovacs | 52% | 32% | 45% | +13 |
+| Deebot | 56% | 33% | 45% | +12 |
+| Anker | 18% | 8% | 17% | +8 |
+
+**No brand moves more than 13 points**, against a noise floor of ~5. Meanwhile the
+finding those numbers support — Dreame at 5% ungrounded versus 97% grounded — is a
+**92-point** effect. A 13-point temperature shift does not threaten it, and rank order
+is preserved throughout.
+
+**So: nothing needs re-running.** What it does need is the label, which is why every
+manifest now records its temperature and why §6c carries the +5% note. The one place I
+would re-measure before relying on it in production is any *absolute* brand share
+quoted from a 0.7 run, since those are the numbers a customer would read.
+
 ### What this still does not settle
 
 One prompt template, one phrasing, English only. Temperature interacts with prompt
@@ -1269,6 +1331,10 @@ same work, the same model, for 12% of the bill. The equivalent grounded volume, 
 assumed SKU rate, would be **$461,500/year** before any of these levers apply.
 
 Three levers, in order of size:
+
+> **Measured at temperature 0.7.** At the recommended 1.0 (§0e) per-request cost is
+> **+5.0%** — $0.000294 → $0.000309 — because answers run ~5% longer. Every ratio in
+> this section is unaffected, since both arms shift together.
 
 **Thinking off (4.0x).** Measured on us-central1, §4. Output tokens are ~8x the price of
 input and, with dynamic thinking, ~4x the volume, so this is where the money is.
