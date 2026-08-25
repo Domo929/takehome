@@ -2128,6 +2128,56 @@ Too small starves connection churn; too large pays for the linear pool scan. The
 optimum is roughly 2–4x concurrency, which is what `min(128, pool // 2)` already lands
 on. Worth knowing, but not where the throughput went.
 
+## 6i. One process is the service ceiling too, not just the client *(validated)*
+
+§6g found the *client* ceiling was our own event loop rather than Vertex. An external
+reviewer asked the obvious follow-up: does the same thing bound the service, and at
+what point does adding uvicorn workers help?
+
+The naive version of this experiment is confounded. Running 4 workers also gives 4x the
+admission capacity, so more throughput proves nothing about the GIL. **Total admission
+capacity is therefore held at 512 across every configuration** — 1 worker at 512, 2 at
+256, 4 at 128 — so the only variable is how many OS processes that capacity spans.
+
+400 rps offered for 20s against the mock at 50ms, pool 1,024:
+
+| Workers | Capacity each | Served | Shed | Served rps | p50 | p99 | Our overhead p99 |
+|---|---|---|---|---|---|---|---|
+| **1** | 512 | 3,099 | **4,902** | **155** | 50 ms | **12,305 ms** | 0.27 ms |
+| 2 | 256 | 6,546 | 1,454 | 327 | 658 ms | 5,698 ms | 0.28 ms |
+| **4** | 128 | **8,000** | **0** | **400** | 57 ms | **814 ms** | 0.45 ms |
+
+Same capacity, same offered load, same backend. **A single process sheds 61% of the
+traffic that four processes absorb entirely**, and p99 falls 15x.
+
+**Our per-request overhead barely moves** — 0.27ms to 0.45ms p99 across the range. The
+service is not slow, and no amount of optimising the request path would have closed
+this gap. A single event loop simply cannot schedule the work, which is the same
+mechanism §6g found on the client side, reproduced at the service.
+
+That also explains the admission math. At 512 permits on one process, the semaphore
+admits far more concurrent work than the loop can drive, so requests are accepted and
+then starve — p99 12.3s while the code path itself costs a quarter of a millisecond.
+Capacity beyond what one loop can serve is not capacity, it is queueing with extra
+steps.
+
+### What this changes
+
+**Scale by processes, not by concurrency.** This is the operational form of §6g's
+conclusion. `parallelism()` at 128 is per process, and the right deployment is N
+workers each admitting 128 rather than one worker admitting 512.
+
+**The Dockerfile should not hardcode a worker count**, since the useful number is
+CPU-dependent. It is left to the orchestrator, which is where that decision belongs.
+
+**Caveat.** Measured against the mock at 50ms so the ceiling would be ours rather than
+the vendor's, and with an unusually cheap backend. Against real Vertex at ~1.4s per
+request the per-process ceiling is reached at far lower rps, so these absolute numbers
+are a mechanism demonstration rather than a capacity plan. The *shape* is what
+transfers.
+
+---
+
 ## 7. Cost control *(validated)*
 
 Confirmed rates: **$0.30 / 1M input, $2.50 / 1M output**, thinking billed at the

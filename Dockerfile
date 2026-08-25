@@ -38,9 +38,13 @@ ENV GEMINI_BACKEND=vertex \
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=2).status==200 else 1)"
 
-# Exec form so PID 1 is uvicorn and receives SIGTERM directly. Without this the
-# graceful drain in service/app.py would never run, because a shell would swallow
-# the signal.
+# One worker by default, scaled by replica count rather than by --workers: the useful
+# number is CPU-dependent and belongs to the orchestrator. A single process sheds 61%
+# of load that four absorb at identical total admission capacity (FINDINGS 6i), so
+# this is a decision to make deliberately, not a default to inherit.
+#
+# Exec form so PID 1 is uvicorn and receives SIGTERM directly. Without it the graceful
+# drain in service/app.py never runs, because a shell swallows the signal.
 CMD ["python", "-m", "uvicorn", "service.app:app", \
      "--host", "0.0.0.0", "--port", "8000", \
      "--timeout-graceful-shutdown", "30", \
