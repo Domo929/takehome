@@ -107,10 +107,43 @@ class ServiceState:
         self.inflight = 0
         self.capacity = 0
         # Optional. Without it a runaway loop bills until someone notices.
-        self.budget_usd = float(os.getenv("SERVICE_BUDGET_USD", "0") or 0)
+        #
+        # Windowed rather than lifetime: a monotonic counter on a long-running server
+        # eventually bricks it permanently, so the ceiling would have to be set for
+        # the process lifetime rather than for a rate. The window resets on first use
+        # after it expires, so an idle service does not accumulate credit.
+        self.budget_usd = 0.0
+        self.budget_window_s = 0.0
         self.spent_usd = 0.0
+        self.lifetime_spent_usd = 0.0
+        self.window_started = time.monotonic()
         # Dropping in-flight requests means paying for answers we throw away.
         self.draining = False
+
+    def load_budget_config(self) -> None:
+        """Read the budget at startup, not at import.
+
+        Reading it in __init__ binds it to import time, so anything that configures
+        the environment afterwards - a container entrypoint, a test - is silently
+        ignored and the ceiling is quietly absent.
+        """
+        self.budget_usd = float(os.getenv("SERVICE_BUDGET_USD", "0") or 0)
+        self.budget_window_s = float(os.getenv("SERVICE_BUDGET_WINDOW_S", "86400") or 0)
+        self.spent_usd = 0.0
+        self.window_started = time.monotonic()
+
+    def roll_budget_window(self) -> None:
+        """Start a new spend window if the current one has expired."""
+        if self.budget_window_s <= 0:
+            return
+        if time.monotonic() - self.window_started >= self.budget_window_s:
+            self.window_started = time.monotonic()
+            self.spent_usd = 0.0
+
+    def budget_window_remaining_s(self) -> float:
+        if self.budget_window_s <= 0:
+            return 0.0
+        return max(0.0, self.budget_window_s - (time.monotonic() - self.window_started))
 
 
 state = ServiceState()
@@ -134,13 +167,21 @@ async def _admission(limiter, gate):
             yield
 
 
+def _build_provider() -> Gemini:
+    """Seam for tests, which need the HTTP lifecycle without a real vendor client."""
+    return Gemini()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_logging()
     # One per process: constructing per request would defeat pooling and hide the
     # ceiling in FINDINGS 3.
-    state.provider = Gemini()
-    state.capacity = int(os.getenv("SERVICE_CAPACITY", state.provider.parallelism()))
+    state.load_budget_config()
+    state.provider = _build_provider()
+    state.capacity = int(
+        os.getenv("SERVICE_CAPACITY") or state.provider.parallelism()
+    )
     # A fixed semaphore cannot represent a moving limit, so adaptive owns admission.
     state.gate = None if state.provider.limiter else asyncio.Semaphore(state.capacity)
     if state.budget_usd > 0:
@@ -221,16 +262,23 @@ async def ask(payload: AskRequest) -> JSONResponse:
 
     started = time.perf_counter()
 
-    if state.budget_usd > 0 and state.spent_usd >= state.budget_usd:
-        service_requests_total.labels(outcome="over_budget", finish_reason="").inc()
-        return JSONResponse(
-            {
-                "error": "spend ceiling reached",
-                "spent_usd": round(state.spent_usd, 6),
-                "budget_usd": state.budget_usd,
-            },
-            status_code=503,
-        )
+    if state.budget_usd > 0:
+        state.roll_budget_window()
+        if state.spent_usd >= state.budget_usd:
+            service_requests_total.labels(outcome="over_budget", finish_reason="").inc()
+            retry_after = max(1, int(state.budget_window_remaining_s()))
+            return JSONResponse(
+                {
+                    "error": "spend ceiling reached",
+                    "spent_usd": round(state.spent_usd, 6),
+                    "budget_usd": state.budget_usd,
+                    "window_resets_in_s": retry_after,
+                },
+                status_code=503,
+                # Tells a caller when to come back instead of leaving it to guess,
+                # which is the difference between backpressure and an outage.
+                headers={"Retry-After": str(retry_after)},
+            )
 
     # Checked before awaiting, so a saturated service rejects immediately rather
     # than growing an invisible backlog.
@@ -317,6 +365,7 @@ async def ask(payload: AskRequest) -> JSONResponse:
 
     if state.budget_usd > 0:
         state.spent_usd += result.cost_usd or 0.0
+        state.lifetime_spent_usd += result.cost_usd or 0.0
         budget_remaining_usd.set(max(0.0, state.budget_usd - state.spent_usd))
 
     # What remains after vendor time and deliberate sleep: framework, validation,

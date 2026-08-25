@@ -382,7 +382,10 @@ class Gemini(LLM):
         # `answer: str` contract holds; the provider raises before returning empty.
         try:
             answer = response.text or ""
-        except Exception:
+        except (ValueError, AttributeError):
+            # The SDK raises ValueError on blocked payloads. Narrow on purpose: a
+            # broad catch here would turn an SDK breaking change into "empty
+            # response", which retries four times and reports a vendor fault.
             answer = ""
         if not answer.strip():
             answer = ""
