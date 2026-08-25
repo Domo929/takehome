@@ -1026,6 +1026,25 @@ brand-recommendation prompts, concurrency 3.
 `thinking_budget` and `max_output_tokens` draw on **one shared allowance**. The SDK
 default is `thinking_budget=-1`, meaning dynamic and effectively unbounded.
 
+**Verified, after an external review pointed out that I had never actually checked it.**
+Every run in `results/real/` set the budget explicitly to `0` or `-1`, so the default
+itself was assumed rather than observed. A request with no `thinking_config` at all
+returns **212 thinking tokens**, so the default does reason on its own and the framing
+below holds. Two details from that probe, both n=1:
+
+| Config | Thinking tokens | Visible tokens |
+|---|---|---|
+| unset (the default) | 212 | 85 |
+| `thinking_budget=0` | 0 | **260** |
+| `thinking_budget=-1` | **826** | 25 |
+
+The default is not identical to explicit `-1` — 212 against 826 — so "unset" and
+"dynamic" are apparently not the same setting, though at one sample each that is an
+observation rather than a result. More usefully, **visible output moves inversely to
+thinking**: 260 visible tokens with thinking off against 25 with it dynamic, on the
+same prompt and the same 1,024-token cap. That is the shared-allowance mechanism in
+§4 showing up directly rather than inferred.
+
 | Tier | `thinking_budget` | usable | rps | p50 | p99 | out tok/req | thinking | $/req |
 |---|---|---|---|---|---|---|---|---|
 | **Vertex us-central1** | `0` (off) | **15/15** | 1.03 | **1,471 ms** | 9,189 ms | 111.1 | 0 | **0.000288** |
@@ -2307,6 +2326,13 @@ Evertune, not a parameter. And §0d shows grounded answers vary *more*, not less
 identical prompts issued 428 searches across 154 distinct query strings, so the
 grounded condition carries retrieval variance on top of generation variance.
 
+**Does attaching a tool change what the model will say?** §8 saw a single request
+decline a question it answers freely without a tool attached, reinterpreting its role
+around the tool it had been given. n=1, no rate claimed. If it replicates it is a
+serious confound for a product whose measurement *is* the answer content, and it would
+apply to any structured-extraction design. 20 paired requests would settle it for about
+a cent.
+
 **Redirect resolution (upgraded to a blocker for provenance).** §0d found the
 citation URLs are not merely opaque, they are **unique per request**: 852 URLs across
 100 samples, zero repeats, because Vertex signs a fresh redirect token each time. Any
@@ -2382,11 +2408,46 @@ available and free; the prompt never elicits it. "Which brands are worth conside
 does not invite negatives, so attributing negative sentiment needs a differently-shaped
 prompt, not just a differently-shaped response.
 
+### Tool calling does not get around it either
+
+A reviewer asked the right follow-up: `responseSchema` is one route to structured
+output, and function calling is another. If a custom function declaration could run
+alongside `GoogleSearch`, structured extraction on the grounded arm would be back.
+
+It cannot. Vertex rejects that combination too, and the error is broader than the
+first one:
+
+```
+400 INVALID_ARGUMENT
+Multiple tools are supported only when they are all search tools.
+```
+
+Both shapes fail — two `Tool` objects, and a single `Tool` carrying both a function
+declaration and `google_search`. So the restriction is not specific to controlled
+generation: **grounding cannot coexist with any non-search tool.** §8's conclusion
+survives the challenge and is stronger than first stated, since it now rules out the
+obvious workaround rather than only the obvious approach.
+
+**One unexpected observation, n=1 and reported as such.** With the function tool
+attached and no grounding, the model declined the question outright:
+
+```
+"I can't answer that, as I cannot make specific product recommendations. I can,
+ however, record any brands you are considering, along with your sentiment toward them."
+```
+
+Same prompt, same temperature, `finish_reason=STOP`, no safety block — it simply
+reinterpreted its role around the tool it had been given. Tool presence appears to
+change *what the model is willing to say*, not just how it formats the reply. For a
+brand-visibility product that would be a serious confound, since the measurement is the
+answer content. It is a single observation and I am not claiming a rate, but anyone
+adding tools to this pipeline should check for it before trusting the output.
+
 **Net recommendation:** worth enabling on the ungrounded condition, where it removes a
 downstream call and makes truncation loud, at 1.54x output tokens and a raised cap. Not
-available on the grounded condition at all, so any extraction pipeline still needs a
-prose path — and per §0c that path must be validated separately on grounded output,
-which is where it is most likely to fail.
+available on the grounded condition by any route, so any extraction pipeline still
+needs a prose path — and per §0c that path must be validated separately on grounded
+output, which is where it is most likely to fail.
 
 **Logprobs are free and additive** (§6e). If downstream ever wants "considered but not
 recommended" as a signal, the data is already on the response at no token cost. The
