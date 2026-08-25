@@ -47,6 +47,10 @@ The four that most changed what I would build:
   conditions. §0d
 - **The concurrency ceiling is ours, not Vertex's.** §6g
 - **Dynamic thinking is the SDK default and costs ~4x.** §4
+- **`responseSchema` cannot be combined with grounding** — Vertex returns a hard 400,
+  so structured output is unavailable exactly where extraction is hardest. §8
+- **Flash-Lite is 11.5x cheaper and finds 30% fewer informative brands** — but on a
+  two-condition workload it saves only 1.6%, because the grounding SKU dominates. §0f
 - **`temperature=0` cannot express a brand share.** Across 11 categories, not one
   brand in 103 landed between a 10% and 90% mention rate — every brand reads as always
   or never. It also finds ~35% fewer brands, in every category tested. The measured

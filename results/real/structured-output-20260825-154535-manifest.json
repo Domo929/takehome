@@ -1,0 +1,73 @@
+{
+  "experiment": "structured-output",
+  "started_utc": "2026-08-25T21:44:54Z",
+  "duration_s": 40.9,
+  "project": "evertune-tests",
+  "location": "us-central1",
+  "requests": 160,
+  "grounded_prompts_billed": 10,
+  "modelled_cost_usd": 0.420776,
+  "truncation_cap": 200,
+  "arms": [
+    {
+      "arm": "prose-ungrounded",
+      "n": 60,
+      "errors": 0,
+      "extract_ok": 60,
+      "extract_rate": 1.0,
+      "mean_output_tokens": 128.9,
+      "mean_brands": 5.95,
+      "truncated": 0,
+      "distinct_brands": 85
+    },
+    {
+      "arm": "schema-ungrounded",
+      "n": 60,
+      "errors": 0,
+      "extract_ok": 60,
+      "extract_rate": 1.0,
+      "mean_output_tokens": 198.3,
+      "mean_brands": 5.45,
+      "truncated": 0,
+      "distinct_brands": 85
+    },
+    {
+      "arm": "prose-grounded",
+      "n": 10,
+      "errors": 0,
+      "extract_ok": 10,
+      "extract_rate": 1.0,
+      "mean_output_tokens": 488.0,
+      "mean_brands": 8.5,
+      "truncated": 2,
+      "distinct_brands": 72
+    },
+    {
+      "arm": "schema-grounded",
+      "n": 0,
+      "errors": 10
+    },
+    {
+      "arm": "prose-truncated",
+      "n": 10,
+      "errors": 0,
+      "extract_ok": 10,
+      "extract_rate": 1.0,
+      "mean_output_tokens": 123.3,
+      "mean_brands": 5.2,
+      "truncated": 0,
+      "distinct_brands": 51
+    },
+    {
+      "arm": "schema-truncated",
+      "n": 10,
+      "errors": 0,
+      "extract_ok": 5,
+      "extract_rate": 0.5,
+      "mean_output_tokens": 182.7,
+      "mean_brands": 2.6,
+      "truncated": 5,
+      "distinct_brands": 26
+    }
+  ]
+}

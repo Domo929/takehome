@@ -1,0 +1,774 @@
+{
+  "experiment": "temperature-multi",
+  "prompt_template": "Which {category} brands are worth considering?",
+  "started_utc": "2026-08-25T21:46:26Z",
+  "duration_s": 136.5,
+  "project": "evertune-tests",
+  "location": "us-central1",
+  "model": "gemini-2.5-flash-lite",
+  "samples_per_cell": 60,
+  "temperatures": [
+    1.0
+  ],
+  "categories": [
+    "air purifier",
+    "cast iron skillet",
+    "dash cam",
+    "electric toothbrush",
+    "espresso machine",
+    "mechanical keyboard",
+    "office chair",
+    "robot vacuum",
+    "running shoe",
+    "standing desk",
+    "wireless earbud"
+  ],
+  "requests": 660,
+  "modelled_cost_usd": 0.017675,
+  "cells": [
+    {
+      "category": "air purifier",
+      "temperature": 1.0,
+      "n": 60,
+      "errors": 0,
+      "distinct_brands": 12,
+      "distinct_answer_brand_sets": 21,
+      "mean_brands_per_answer": 4.62,
+      "entropy_bits": 2.802,
+      "cross_batch_drift": 0.0528,
+      "mean_output_tokens": 81.9,
+      "truncated": 0,
+      "cost_usd": 0.002151,
+      "brand_counts": [
+        [
+          "coway",
+          60
+        ],
+        [
+          "blueair",
+          58
+        ],
+        [
+          "levoit",
+          54
+        ],
+        [
+          "dyson",
+          43
+        ],
+        [
+          "honeywell",
+          27
+        ],
+        [
+          "winix",
+          13
+        ],
+        [
+          "molekule",
+          12
+        ],
+        [
+          "germguardian",
+          5
+        ],
+        [
+          "philips",
+          2
+        ],
+        [
+          "austin air",
+          1
+        ],
+        [
+          "iqair",
+          1
+        ],
+        [
+          "vesync",
+          1
+        ]
+      ],
+      "aside_counts": []
+    },
+    {
+      "category": "cast iron skillet",
+      "temperature": 1.0,
+      "n": 60,
+      "errors": 0,
+      "distinct_brands": 8,
+      "distinct_answer_brand_sets": 14,
+      "mean_brands_per_answer": 3.5,
+      "entropy_bits": 2.477,
+      "cross_batch_drift": 0.05,
+      "mean_output_tokens": 19.1,
+      "truncated": 0,
+      "cost_usd": 0.00065,
+      "brand_counts": [
+        [
+          "lodge",
+          60
+        ],
+        [
+          "le creuset",
+          40
+        ],
+        [
+          "staub",
+          39
+        ],
+        [
+          "smithey",
+          32
+        ],
+        [
+          "field",
+          31
+        ],
+        [
+          "butter pat",
+          4
+        ],
+        [
+          "finex",
+          3
+        ],
+        [
+          "stargazer",
+          1
+        ]
+      ],
+      "aside_counts": []
+    },
+    {
+      "category": "dash cam",
+      "temperature": 1.0,
+      "n": 60,
+      "errors": 0,
+      "distinct_brands": 8,
+      "distinct_answer_brand_sets": 11,
+      "mean_brands_per_answer": 3.6,
+      "entropy_bits": 2.287,
+      "cross_batch_drift": 0.0667,
+      "mean_output_tokens": 91.8,
+      "truncated": 0,
+      "cost_usd": 0.002388,
+      "brand_counts": [
+        [
+          "thinkware",
+          58
+        ],
+        [
+          "viofo",
+          58
+        ],
+        [
+          "blackvue",
+          45
+        ],
+        [
+          "garmin",
+          43
+        ],
+        [
+          "nextbase",
+          5
+        ],
+        [
+          "anker",
+          3
+        ],
+        [
+          "roav",
+          3
+        ],
+        [
+          "70mai",
+          1
+        ]
+      ],
+      "aside_counts": []
+    },
+    {
+      "category": "electric toothbrush",
+      "temperature": 1.0,
+      "n": 60,
+      "errors": 0,
+      "distinct_brands": 8,
+      "distinct_answer_brand_sets": 6,
+      "mean_brands_per_answer": 3.78,
+      "entropy_bits": 2.191,
+      "cross_batch_drift": 0.0458,
+      "mean_output_tokens": 55.9,
+      "truncated": 0,
+      "cost_usd": 0.001528,
+      "brand_counts": [
+        [
+          "oral-b",
+          60
+        ],
+        [
+          "philips",
+          60
+        ],
+        [
+          "sonicare",
+          60
+        ],
+        [
+          "quip",
+          39
+        ],
+        [
+          "colgate",
+          4
+        ],
+        [
+          "burst",
+          2
+        ],
+        [
+          "waterpik",
+          1
+        ],
+        [
+          "aquasonic",
+          1
+        ]
+      ],
+      "aside_counts": []
+    },
+    {
+      "category": "espresso machine",
+      "temperature": 1.0,
+      "n": 60,
+      "errors": 0,
+      "distinct_brands": 13,
+      "distinct_answer_brand_sets": 16,
+      "mean_brands_per_answer": 4.73,
+      "entropy_bits": 2.883,
+      "cross_batch_drift": 0.041,
+      "mean_output_tokens": 39.3,
+      "truncated": 0,
+      "cost_usd": 0.001129,
+      "brand_counts": [
+        [
+          "breville",
+          60
+        ],
+        [
+          "gaggia",
+          60
+        ],
+        [
+          "de'longhi",
+          57
+        ],
+        [
+          "rancilio",
+          45
+        ],
+        [
+          "bambino",
+          19
+        ],
+        [
+          "rocket",
+          15
+        ],
+        [
+          "ascaso",
+          8
+        ],
+        [
+          "lelit",
+          7
+        ],
+        [
+          "la marzocco",
+          7
+        ],
+        [
+          "delonghi",
+          3
+        ],
+        [
+          "ecm",
+          1
+        ],
+        [
+          "profitec",
+          1
+        ],
+        [
+          "philips",
+          1
+        ]
+      ],
+      "aside_counts": [
+        [
+          "bambino",
+          13
+        ]
+      ]
+    },
+    {
+      "category": "mechanical keyboard",
+      "temperature": 1.0,
+      "n": 60,
+      "errors": 0,
+      "distinct_brands": 13,
+      "distinct_answer_brand_sets": 29,
+      "mean_brands_per_answer": 4.42,
+      "entropy_bits": 3.107,
+      "cross_batch_drift": 0.0692,
+      "mean_output_tokens": 61.1,
+      "truncated": 0,
+      "cost_usd": 0.001652,
+      "brand_counts": [
+        [
+          "keychron",
+          58
+        ],
+        [
+          "ducky",
+          44
+        ],
+        [
+          "gmmk",
+          36
+        ],
+        [
+          "glorious",
+          33
+        ],
+        [
+          "logitech",
+          30
+        ],
+        [
+          "corsair",
+          25
+        ],
+        [
+          "razer",
+          17
+        ],
+        [
+          "varmilo",
+          7
+        ],
+        [
+          "steelseries",
+          4
+        ],
+        [
+          "epomaker",
+          4
+        ],
+        [
+          "leopold",
+          3
+        ],
+        [
+          "akko",
+          2
+        ],
+        [
+          "wooting",
+          2
+        ]
+      ],
+      "aside_counts": [
+        [
+          "gmmk",
+          15
+        ]
+      ]
+    },
+    {
+      "category": "office chair",
+      "temperature": 1.0,
+      "n": 60,
+      "errors": 0,
+      "distinct_brands": 13,
+      "distinct_answer_brand_sets": 27,
+      "mean_brands_per_answer": 6.62,
+      "entropy_bits": 3.27,
+      "cross_batch_drift": 0.0487,
+      "mean_output_tokens": 26.2,
+      "truncated": 0,
+      "cost_usd": 0.000815,
+      "brand_counts": [
+        [
+          "herman miller",
+          60
+        ],
+        [
+          "humanscale",
+          60
+        ],
+        [
+          "steelcase",
+          60
+        ],
+        [
+          "aeron",
+          59
+        ],
+        [
+          "leap",
+          46
+        ],
+        [
+          "gesture",
+          33
+        ],
+        [
+          "haworth",
+          22
+        ],
+        [
+          "embody",
+          18
+        ],
+        [
+          "knoll",
+          12
+        ],
+        [
+          "branch",
+          10
+        ],
+        [
+          "secretlab",
+          10
+        ],
+        [
+          "autonomous",
+          6
+        ],
+        [
+          "x-chair",
+          1
+        ]
+      ],
+      "aside_counts": [
+        [
+          "aeron",
+          16
+        ],
+        [
+          "gesture",
+          16
+        ],
+        [
+          "leap",
+          16
+        ],
+        [
+          "embody",
+          14
+        ]
+      ]
+    },
+    {
+      "category": "robot vacuum",
+      "temperature": 1.0,
+      "n": 60,
+      "errors": 0,
+      "distinct_brands": 12,
+      "distinct_answer_brand_sets": 19,
+      "mean_brands_per_answer": 4.9,
+      "entropy_bits": 2.848,
+      "cross_batch_drift": 0.0556,
+      "mean_output_tokens": 64.4,
+      "truncated": 0,
+      "cost_usd": 0.001731,
+      "brand_counts": [
+        [
+          "roborock",
+          60
+        ],
+        [
+          "roomba",
+          60
+        ],
+        [
+          "irobot",
+          52
+        ],
+        [
+          "ecovacs",
+          40
+        ],
+        [
+          "deebot",
+          33
+        ],
+        [
+          "shark",
+          29
+        ],
+        [
+          "eufy",
+          11
+        ],
+        [
+          "anker",
+          4
+        ],
+        [
+          "ilife",
+          2
+        ],
+        [
+          "tineco",
+          1
+        ],
+        [
+          "samsung",
+          1
+        ],
+        [
+          "wyze",
+          1
+        ]
+      ],
+      "aside_counts": [
+        [
+          "irobot",
+          23
+        ],
+        [
+          "deebot",
+          12
+        ],
+        [
+          "roomba",
+          12
+        ],
+        [
+          "anker",
+          3
+        ]
+      ]
+    },
+    {
+      "category": "running shoe",
+      "temperature": 1.0,
+      "n": 60,
+      "errors": 0,
+      "distinct_brands": 11,
+      "distinct_answer_brand_sets": 12,
+      "mean_brands_per_answer": 5.5,
+      "entropy_bits": 2.885,
+      "cross_batch_drift": 0.0727,
+      "mean_output_tokens": 67.1,
+      "truncated": 0,
+      "cost_usd": 0.001796,
+      "brand_counts": [
+        [
+          "brooks",
+          60
+        ],
+        [
+          "hoka",
+          60
+        ],
+        [
+          "saucony",
+          60
+        ],
+        [
+          "asics",
+          50
+        ],
+        [
+          "new balance",
+          50
+        ],
+        [
+          "nike",
+          24
+        ],
+        [
+          "adidas",
+          11
+        ],
+        [
+          "altra",
+          6
+        ],
+        [
+          "salomon",
+          6
+        ],
+        [
+          "mizuno",
+          2
+        ],
+        [
+          "on",
+          1
+        ]
+      ],
+      "aside_counts": []
+    },
+    {
+      "category": "standing desk",
+      "temperature": 1.0,
+      "n": 60,
+      "errors": 0,
+      "distinct_brands": 11,
+      "distinct_answer_brand_sets": 30,
+      "mean_brands_per_answer": 4.8,
+      "entropy_bits": 3.004,
+      "cross_batch_drift": 0.0667,
+      "mean_output_tokens": 64.0,
+      "truncated": 0,
+      "cost_usd": 0.001722,
+      "brand_counts": [
+        [
+          "fully",
+          60
+        ],
+        [
+          "uplift",
+          55
+        ],
+        [
+          "jarvis",
+          45
+        ],
+        [
+          "vari",
+          34
+        ],
+        [
+          "herman miller",
+          33
+        ],
+        [
+          "flexispot",
+          22
+        ],
+        [
+          "autonomous",
+          17
+        ],
+        [
+          "steelcase",
+          11
+        ],
+        [
+          "bekant",
+          5
+        ],
+        [
+          "ikea",
+          5
+        ],
+        [
+          "secretlab",
+          1
+        ]
+      ],
+      "aside_counts": [
+        [
+          "jarvis",
+          5
+        ]
+      ]
+    },
+    {
+      "category": "wireless earbud",
+      "temperature": 1.0,
+      "n": 60,
+      "errors": 0,
+      "distinct_brands": 18,
+      "distinct_answer_brand_sets": 22,
+      "mean_brands_per_answer": 8.03,
+      "entropy_bits": 3.529,
+      "cross_batch_drift": 0.0444,
+      "mean_output_tokens": 80.0,
+      "truncated": 0,
+      "cost_usd": 0.002113,
+      "brand_counts": [
+        [
+          "airpods",
+          60
+        ],
+        [
+          "apple",
+          60
+        ],
+        [
+          "bose",
+          60
+        ],
+        [
+          "sony",
+          60
+        ],
+        [
+          "sennheiser",
+          48
+        ],
+        [
+          "samsung",
+          42
+        ],
+        [
+          "jabra",
+          37
+        ],
+        [
+          "anker",
+          34
+        ],
+        [
+          "soundcore",
+          34
+        ],
+        [
+          "earfun",
+          19
+        ],
+        [
+          "galaxy buds",
+          10
+        ],
+        [
+          "skullcandy",
+          5
+        ],
+        [
+          "jbl",
+          5
+        ],
+        [
+          "nothing",
+          3
+        ],
+        [
+          "1more",
+          2
+        ],
+        [
+          "google",
+          1
+        ],
+        [
+          "pixel buds",
+          1
+        ],
+        [
+          "beats",
+          1
+        ]
+      ],
+      "aside_counts": []
+    }
+  ]
+}

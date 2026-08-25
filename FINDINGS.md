@@ -795,6 +795,55 @@ competing.
 
 ---
 
+## 0f. Flash-Lite is 11.5x cheaper and sees 30% less *(measured)*
+
+The brief asks what is surprising about this model compared to others. The cleanest
+available comparison is within the same family, since it holds the vendor, the API, the
+region and the prompt constant and varies only the model tier.
+
+Same 11 categories, same closed vocabularies, same prompts, temperature 1.0, n=60 per
+category. **660 requests, $0.018.** Raw data in `results/real/flash-lite-*`.
+
+| | 2.5 Flash | 2.5 Flash-Lite | |
+|---|---|---|---|
+| Cost per request | $0.000309 | **$0.000027** | **11.5x cheaper** |
+| Mean output tokens | 119.8 | 59.2 | 0.49x |
+| Distinct brands found | 148 | 127 | −14% |
+| **Brands in the informative 10–90% band** | **81** | **57** | **−30%** |
+
+Flash-Lite is dramatically cheaper and it is not a free lunch. It loses 14% of brand
+coverage outright, and — using the measure §0e established as the one that matters —
+**30% of the brands whose mention rate is actually informative.** It also answers in
+roughly half as many tokens, which is most of where the cost saving comes from.
+
+The two models broadly agree on the leaders (Herman Miller and Steelcase top office
+chairs in both, Coway and Lodge identical), so this is a resolution difference rather
+than a disagreement. Flash-Lite sees the same picture with fewer pixels.
+
+### Whether the saving is worth taking depends entirely on grounding
+
+This is where the §0c economics bite, and the answer is not the obvious one:
+
+| Workload | Flash | Flash-Lite | Saving |
+|---|---|---|---|
+| Ungrounded only | $0.000309 | $0.000027 | **11.5x** |
+| **Both conditions (the real workload)** | **$0.035618** | **$0.035054** | **1.6%** |
+
+The grounding SKU is charged per prompt regardless of model, so on a two-condition
+workload switching to Flash-Lite trades **30% of the informative measurement for a 1.6%
+cost reduction.** That is a clearly bad trade, and it would have looked like an obvious
+win from the token prices alone.
+
+**So: stay on Flash.** Flash-Lite is the right choice only for an ungrounded-only
+workload where 11.5x matters more than resolution — and given §0c, that is not this
+product.
+
+The wider point is the one worth carrying: **once a per-prompt SKU dominates, model
+selection stops being a cost lever.** Every intuition built on token pricing — cheaper
+tier, shorter answers, batch discounts — is reasoning about the 1% of the bill.
+
+---
+
 ## 1. The model retires 2026-10-16 — noted, not blocking
 
 Gemini 2.5 Flash on Vertex is scheduled for retirement on **2026-10-16**, confirmed
@@ -2234,14 +2283,60 @@ later day would begin to answer it.
 Not built, because it changes the response contract and that is a product decision.
 But two things are worth recording.
 
-**`responseSchema` would likely pay for itself.** Gemini can emit guaranteed-shape JSON
-directly. If a second model is currently turning prose into structured brand mentions,
-having Gemini produce the structure removes that call — plausibly a larger saving than
-anything in §6c, since it eliminates an inference rather than discounting one. It also
-converts truncation from a silent failure into a parse error: a `MAX_TOKENS` cut in
-the middle of JSON is malformed and detectable, whereas a truncated prose list reads
-as a complete short list. Given §6f measured **3.3% truncation** (ungrounded; 50% grounded, §0c) even at a 512-token
-cap, that distinction is not hypothetical.
+**`responseSchema` cannot be used with grounding. Measured, and it ends the
+recommendation I was about to make.**
+
+An earlier version of this section argued that structured output would likely pay for
+itself: Gemini emitting guaranteed-shape JSON removes a downstream extraction call, and
+truncated JSON is malformed and therefore detectable where truncated prose reads as a
+complete short list. That argument was sound and I tested it. 160 requests, $0.42, raw
+data in `results/real/structured-output-*`.
+
+**Vertex refuses the combination outright:**
+
+```
+400 INVALID_ARGUMENT
+Unable to submit request because controlled generation is not supported with Search tool
+```
+
+10 of 10 grounded schema requests failed with that error. `responseSchema` and
+`google_search` are mutually exclusive — not degraded, not slower, rejected. Since the
+grounded condition is the measurement axis and ~99% of the cost (§0c), **structured
+output is unavailable for the half of the workload where extraction is hardest.**
+
+That is precisely backwards from what would be useful. §0c found grounded answers
+change shape — 14 of 20 came back as structured listicles that a prose extractor
+misparses quietly — so grounding is where a schema would earn the most, and it is the
+one place it cannot go.
+
+The ungrounded arm still works, and the rest of the argument held up:
+
+| | Prose | Schema | |
+|---|---|---|---|
+| Extraction succeeded | 100% | 100% | — |
+| Mean output tokens | 128.9 | 198.3 | **1.54x** |
+| Brands per answer | 5.95 | 5.45 | −8% |
+| Distinct brands found | — | — | comparable |
+
+**Truncation detectability is confirmed, with a catch.** At a deliberately low 200-token
+cap: prose truncated 0 of 10 and schema truncated **5 of 10** — because JSON is 54%
+more verbose, it hits the cap sooner. But every one of those 5 was *detected*, because
+the JSON failed to parse. Zero silent failures against a prose arm where truncation
+would have been invisible. So the trade is real but it is a trade: **more frequent loud
+failures in place of rarer silent ones**, and the cap has to rise ~1.5x to compensate.
+
+**The sentiment field was a miss.** I included `sentiment: recommended | mentioned |
+not_recommended` in the schema on the §0c reasoning that mention-counting is not enough.
+Across 327 labels the model used `not_recommended` **zero times**. The field is
+available and free; the prompt never elicits it. "Which brands are worth considering"
+does not invite negatives, so attributing negative sentiment needs a differently-shaped
+prompt, not just a differently-shaped response.
+
+**Net recommendation:** worth enabling on the ungrounded condition, where it removes a
+downstream call and makes truncation loud, at 1.54x output tokens and a raised cap. Not
+available on the grounded condition at all, so any extraction pipeline still needs a
+prose path — and per §0c that path must be validated separately on grounded output,
+which is where it is most likely to fail.
 
 **Logprobs are free and additive** (§6e). If downstream ever wants "considered but not
 recommended" as a signal, the data is already on the response at no token cost. The
