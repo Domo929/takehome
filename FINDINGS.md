@@ -20,6 +20,14 @@
 > measurements. Total spend on Evertune's project is reported by
 > `python scripts/spend_report.py`.
 >
+> **What is committed.** Every run manifest, carrying the aggregates, percentiles,
+> 30-second windows and cost reconciliation each number here is derived from. Plus the
+> per-request records for the experiments, so `scripts/confidence.py` and
+> `scripts/temperature_analysis.py` re-derive their results from the same data a
+> reader has. Per-request records for the *load* runs are excluded — 20 MB of
+> one-line-per-request for throughput tests whose manifests already contain every
+> derived figure.
+>
 > **Point estimates carry sample sizes, and the headline ratios carry bootstrap
 > intervals** — `python scripts/confidence.py` recomputes them from the committed raw
 > data without issuing a request.
@@ -529,118 +537,126 @@ result I wanted and not one I could have assumed.
 
 ---
 
-## 0e. Temperature is a product parameter, not a technical one *(measured)*
+## 0e. Temperature decides whether the measurement can express a share *(measured)*
 
-Everything in this document ran at `temperature=0.7`. That number came from convention
-— the shipped `together.py` takes temperature from the caller and nothing justified a
-value. Since Evertune samples each prompt 100 times and reads the distribution,
-temperature controls how much those samples differ, so it deserved better than a
-default.
+Everything else in this document ran at `temperature=0.7`, a number that came from
+convention rather than measurement. Since Evertune samples each prompt 100 times and
+reads the distribution, temperature controls how much those samples differ, so it is
+worth more than a default.
 
-One prompt, 50 samples at each of five temperatures, ungrounded, `us-central1`.
-**$0.07.** Raw data in `results/real/temperature-*.jsonl`.
+**3,300 requests: 11 product categories x 5 temperatures x 60 samples, ungrounded,
+`us-central1`. $1.08.** An earlier 250-request pilot on a single category is discussed
+at the end, because it got the explanation wrong and the correction is instructive.
 
-| Temp | Distinct brands (95% CI) | Distinct answer sets | Cross-batch drift | Mean out tok |
-|---|---|---|---|---|
-| 0.00 | 10 [6, 10] | 5 | **0.012** | 100 |
-| 0.35 | 16 [13, 16] | 19 | 0.052 | 107 |
-| **0.70** | 14 [11, 14] | 15 | 0.051 | 122 |
-| 1.00 | 16 [11, 16] | 18 | 0.040 | 108 |
-| 1.40 | 19 [15, 19] | 22 | 0.040 | 125 |
+Raw data in `results/real/temperature-multi-*.jsonl`. Reproduce the analysis without
+spending anything: `python scripts/temperature_analysis.py`.
 
-*Cross-batch drift is the mean absolute change in per-brand mention rate between two
-independent 25-sample halves at the same temperature. Nothing about the world changed
-between them, so it is the measurement's own noise floor.*
+### 1. `temperature=0` loses a third of the brands, in every category
 
-### Temperature 0 is not deterministic
+| Temp | Mean distinct brands | vs temp 0 | Categories beating temp 0 |
+|---|---|---|---|
+| **0.00** | **9.4** | **1.00x** | — |
+| 0.35 | 11.9 | 1.34x | 8 / 11 |
+| 0.70 | 13.1 | 1.48x | 10 / 11 |
+| 1.00 | 13.5 | 1.50x | **11 / 11** |
+| 1.40 | 14.2 | **1.62x** | **11 / 11** |
 
-**8 distinct answer strings out of 50 samples at `temperature=0.0`**, and 5 distinct
-brand sets. Not a large spread — one set covers 45 of 50 — but not zero either, and
-"temperature 0 means reproducible" is a common enough assumption to be worth
-falsifying. Anyone using `temperature=0` as a way to get a stable baseline for
-regression-testing prompts will get a baseline that quietly moves.
+Not a single category found more brands at temperature 0 than at 1.0 or 1.4. For a
+product whose job is detecting which brands a model mentions, sampling at temperature 0
+is choosing not to see a third of them.
 
-### The finding that matters: measured brand share swings 6.5x on this setting alone
+### 2. The finding that matters: at temperature 0 the measurement is binary
 
-| Brand | 0.00 | 0.35 | 0.70 | 1.00 | 1.40 |
+Coverage is the obvious metric and it is not the important one. The important one is
+where per-brand mention rates actually *land*:
+
+| Temp | Rate <5% | Middle | Rate >95% | At an extreme | In the 10–90% band |
 |---|---|---|---|---|---|
-| **Anker** | **92%** | 24% | **14%** | 12% | 16% |
-| Shark | 96% | 80% | 62% | 50% | 56% |
-| Eufy | 98% | 88% | 80% | 66% | 78% |
-| **Ecovacs** | **4%** | 22% | 24% | **44%** | 26% |
-| **Deebot** | **4%** | 22% | 24% | **46%** | 26% |
-| Neato | 0% | 20% | 4% | 8% | 8% |
+| **0.00** | 18 | **7** | 78 | **93%** | **0 of 103** |
+| 0.35 | 15 | 72 | 44 | 45% | 57 of 131 |
+| 0.70 | 16 | 95 | 33 | 34% | 74 of 144 |
+| 1.00 | 21 | 95 | 32 | 36% | 81 of 148 |
+| 1.40 | 21 | 109 | 26 | 30% | 81 of 156 |
 
-Anker at 92% [84, 98] versus 14% [6, 24] is not overlapping and not noise. **A brand's
-measured visibility changes by 6.5x depending on a parameter nobody documented**, and
-the direction is not uniform: Anker, Shark and Eufy fall as temperature rises while
-Ecovacs and Deebot climb roughly 10x. This is not "more temperature, more noise" — it
-is a systematic reshaping of the numbers that are the product's output.
+**At temperature 0, not one brand out of 103 landed between 10% and 90%.** Every brand
+was either named in essentially every sample or in essentially none. At 0.7, half of
+them sit in that band.
 
-Rank correlation between temperature settings stays high (Spearman 0.81–0.95), so the
-rough *ordering* survives. It is the magnitudes that move, and magnitudes are what a
-brand-visibility report actually states.
+That is the whole argument. Evertune's deliverable is a *share* — "this brand appears
+in 40% of answers" — and temperature 0 cannot produce one. It produces a yes/no list
+with 100 samples spent confirming it. The apparent stability at temperature 0 (drift
+0.015 against 0.052 at 0.7) is not a better measurement; it is the reproducibility of
+a coin that always lands the same way. Cheaper to compute and carrying no information.
 
-### Why Anker moves: phrasing, not belief
+This also explains the coverage result rather than merely accompanying it. Brands that
+should sit at 15% get rounded to 0% and vanish.
 
-Reading the raw answers, Anker is almost never a standalone recommendation. It appears
-as a parenthetical attribution:
+### 3. Brand share moves enough to change what a report says
 
-```
-temperature=0.0   "*   **Eufy (Anker):** RoboVac X8 Hybrid, RoboVac G20 Hybrid"
-temperature=0.7   "* **Eufy:** reliable and affordable robot vacuums"
-```
+Largest swings across the temperature range, all rates out of 60 samples:
 
-At 0.0 the model writes the parent company 46 times in 50. At 0.7 it writes it 7 times
-in 50. **The model's belief about Eufy barely moved (98% → 80%); what changed is
-whether it bothered to name the parent company.**
+| Brand | Category | 0.00 | 0.35 | 0.70 | 1.00 | 1.40 |
+|---|---|---|---|---|---|---|
+| IKEA / Markus | office chair | **97%** | 10% | 10% | 10% | **5%** |
+| Anker | robot vacuum | **98%** | 20% | 8% | 17% | 18% |
+| Galaxy Buds | wireless earbud | **95%** | 42% | 17% | 17% | **8%** |
+| Technics | wireless earbud | 95% | 42% | 30% | 23% | 10% |
+| Autonomous | office chair | 100% | 85% | 47% | 55% | 25% |
+| SteelSeries | mechanical keyboard | **7%** | 70% | 75% | 67% | **57%** |
 
-That generalises past this one brand. **Temperature changes phrasing conventions, and
-phrasing conventions are exactly what an extraction pipeline reads.** Any brand whose
-visibility depends on being named in an aside — a parent company, a sub-brand, an
-"also known as" — is far more temperature-sensitive than a brand named directly. That
-is a systematic bias in favour of headline brands, and it is invisible unless someone
-looks at the raw text.
+Mean swing across the 116 brands with enough data is **29.9%** [25.4, 34.5]. SteelSeries
+moves in the opposite direction to the rest, which rules out a simple "temperature
+dilutes everything" story.
 
-It also compounds the extraction warning in §0c: grounded answers change *shape*,
-temperature changes *phrasing*, and both are read by the same downstream parser.
+A report stating "Galaxy Buds: 95% visibility" and one stating "Galaxy Buds: 8%" are
+both producible from the same model, the same prompt and the same afternoon.
 
-### The decision
+### 4. The correction: my pilot explained this wrongly
 
-Stated before the run: pick the lowest temperature at which coverage stops growing.
+The single-category pilot found Anker swinging 92% to 14% and traced it to phrasing:
+Anker appeared almost only as a parenthetical attribution inside "Eufy (Anker)", and
+temperature changed how often the model bothered with the aside. I wrote that up as a
+general mechanism — that brands named in asides are systematically more
+temperature-sensitive than brands named directly.
 
-Coverage jumps from 0.0 (10 brands) to 0.35 (16), then the intervals for 0.35, 0.70
-and 1.00 overlap so heavily that nothing distinguishes them at n=50. Drift is flat
-across all of them. **So the rule points at ~0.35, and 0.7 sits inside the same
-plateau.**
+**Across 11 categories that does not hold.** I added parenthetical-mention detection to
+test it, and of 116 brands with enough data only **2** qualified as mostly-aside. The
+comparison technically favours the hypothesis (66.7% mean swing versus 29.9%, a 2.23x
+ratio) but it rests on n=2 and I will not stand behind it. Every one of the largest
+swings above — IKEA, Galaxy Buds, Technics, Autonomous — is a **direct** mention.
 
-The practical conclusions, in order of importance:
+So the pilot found something true about one brand and I generalised it on a sample of
+one. The test that falsified it is in `scripts/temperature_analysis.py` and runs
+against committed data, which is the only reason the error surfaced before submission
+rather than after.
 
-1. **`temperature=0.0` is actively wrong for this product.** It cuts coverage from 16
-   brands to 10, drops Ecovacs and Deebot to 4%, and inflates whatever the model's
-   single most confident phrasing happens to be. The apparent "stability" is a
-   narrower measurement, not a better one.
-2. **0.7 is defensible, and it was still a guess.** Anywhere in [0.35, 1.0] measures
-   about the same thing here, so the value is not wrong — but it was chosen by
-   convention and it happens to land in a safe region rather than because anyone
-   checked. This section is that check.
-3. **Whatever value is chosen has to be frozen and versioned with the results.**
-   Changing it silently rewrites every brand's history: a report saying "Anker: 92%"
-   and one saying "Anker: 14%" can be produced from the same model, the same prompt
-   and the same day. A brand-visibility time series that does not record its
-   temperature is not a time series, it is two different measurements plotted on one
-   axis.
+### 5. What to actually do
 
-The provider now takes temperature per call, `--temperature` is a harness flag,
-`TEMPERATURE` is an env knob in both k6 scripts, and every run manifest records it.
+1. **Do not sample at temperature 0.** It cannot express a share, and it hides a third
+   of the brands. This is the one setting that would silently break the product.
+2. **0.7 is defensible and 1.0 is marginally better.** Coverage keeps climbing to 1.4,
+   but drift plateaus around 0.052–0.057 from 0.7 upward, so the extra spread past 1.0
+   is buying variance rather than visibility. Anywhere in [0.7, 1.0] measures roughly
+   the same thing. The originally-inherited 0.7 was a guess that happened to land in a
+   reasonable place; this section is the check it never had.
+3. **Freeze it and version it with the results.** A brand time series that does not
+   record its temperature is two different measurements plotted on one axis.
+4. **The noise floor is ~5 percentage points**, measured directly as drift between two
+   independent 30-sample halves at the same temperature. Any brand movement smaller
+   than that is not a finding, and nothing in this repo would previously have told you
+   where that threshold sits.
 
-### What this does not settle
+Temperature is now per call on the provider, `--temperature` on the harness,
+`TEMPERATURE` in both k6 scripts, and recorded in every run manifest.
 
-One prompt, one category, n=50. The 6.5x Anker swing is solid, but whether the
-*magnitude* of temperature sensitivity generalises across categories is untested —
-plausibly it is largest where parent/sub-brand relationships exist, and smaller in
-categories with flat brand structures. Worth 20 prompts x 2 temperatures (~$0.03) if
-the number is going to be relied on.
+### What this still does not settle
+
+One prompt template, one phrasing, English only. Temperature interacts with prompt
+wording, and a differently-phrased question could sit at a different point on this
+curve. The 60-sample cells also make rates below ~3% unmeasurable, so the tail this
+whole section is about is exactly where the data is thinnest — logprobs (§6e) are the
+better instrument there, and the two approaches are complementary rather than
+competing.
 
 ---
 
@@ -1988,10 +2004,10 @@ makes the boundary observable; neither soak ran long enough to cross it.
 
 ## 9. Open questions and things still to confirm
 
-~~**Temperature is unmeasured.**~~ **Measured — see §0e.** Brand share swings up to
-6.5x across the range, `temperature=0` is neither deterministic nor safer, and the
-mechanism is phrasing rather than belief. The remaining gap is whether the magnitude
-generalises across categories.
+~~**Temperature is unmeasured.**~~ **Measured across 11 categories — see §0e.** At
+`temperature=0` not one brand in 103 landed between a 10% and 90% mention rate, so the
+measurement cannot express a share at all; coverage also drops ~35%. The remaining gap
+is interaction with prompt wording.
 
 <details><summary>Original open question, kept for the reasoning</summary>
 

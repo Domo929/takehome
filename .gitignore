@@ -230,6 +230,26 @@ __marimo__/
 .env.local
 .env.*
 !.env.example
-results/
 .venv/
 *.jsonl
+
+# Measurement evidence is committed, because a findings document that cites data
+# nobody else can read is asking to be taken on trust.
+#
+# Manifests always: they carry the aggregates, percentiles, time-series windows and
+# cost reconciliation that every number in FINDINGS is derived from.
+#
+# Per-request records only for the experiments, because scripts/confidence.py and
+# scripts/temperature_analysis.py re-derive their results from them. That is what
+# makes "reproduce any ratio without spending" true rather than a claim.
+#
+# Per-request records for the load runs stay out: 20MB of one-line-per-request for
+# throughput tests whose manifests already contain every derived figure.
+results/*
+!results/real/
+results/real/*
+!results/real/*-manifest.json
+!results/real/*.txt
+!results/real/grounding-*.jsonl
+!results/real/production-unit-*.jsonl
+!results/real/temperature-*.jsonl

@@ -1,0 +1,167 @@
+{
+  "experiment": "grounding",
+  "started_utc": "2026-08-24T23:01:45Z",
+  "duration_s": 39.8,
+  "project": "evertune-tests",
+  "location": "us-central1",
+  "model": "gemini-2.5-flash",
+  "requests": 40,
+  "modelled_cost_usd": 0.523425,
+  "grounding_rate_assumed_usd_per_1k": 25.0,
+  "grounded_prompts_billed": 20,
+  "conditions": [
+    {
+      "condition": "ungrounded",
+      "n": 20,
+      "errors": 0,
+      "mean_input_tokens": 35.2,
+      "mean_output_tokens": 160.7,
+      "p50_latency_ms": 2023.1624200023361,
+      "p95_latency_ms": 3256.2105860015436,
+      "truncated": 0,
+      "total_cost_usd": 0.0082462,
+      "with_sources": 0,
+      "mean_sources": 0.0
+    },
+    {
+      "condition": "grounded",
+      "n": 20,
+      "errors": 0,
+      "mean_input_tokens": 35.2,
+      "mean_output_tokens": 299.35,
+      "p50_latency_ms": 4432.177753998985,
+      "p95_latency_ms": 10075.795220000145,
+      "truncated": 10,
+      "total_cost_usd": 0.5151787,
+      "with_sources": 20,
+      "mean_sources": 7.25
+    }
+  ],
+  "mean_brand_jaccard": 0.22,
+  "brands_only_when_grounded": [
+    [
+      "Pro",
+      4
+    ],
+    [
+      "Value",
+      4
+    ],
+    [
+      "One",
+      3
+    ],
+    [
+      "Options",
+      3
+    ],
+    [
+      "Control",
+      3
+    ],
+    [
+      "Max",
+      2
+    ],
+    [
+      "Ultra",
+      2
+    ],
+    [
+      "Gen",
+      2
+    ],
+    [
+      "Another",
+      2
+    ],
+    [
+      "While",
+      2
+    ],
+    [
+      "Plus",
+      2
+    ],
+    [
+      "Essential",
+      2
+    ],
+    [
+      "Ideal",
+      2
+    ],
+    [
+      "Features",
+      2
+    ],
+    [
+      "Seal",
+      1
+    ]
+  ],
+  "brands_only_when_ungrounded": [
+    [
+      "Known",
+      6
+    ],
+    [
+      "Offers",
+      3
+    ],
+    [
+      "Pro",
+      3
+    ],
+    [
+      "Plus",
+      3
+    ],
+    [
+      "Smart",
+      2
+    ],
+    [
+      "Features",
+      2
+    ],
+    [
+      "Excellent",
+      2
+    ],
+    [
+      "Lite",
+      2
+    ],
+    [
+      "Look",
+      2
+    ],
+    [
+      "Stability",
+      2
+    ],
+    [
+      "Wi-Fi",
+      2
+    ],
+    [
+      "RoboVac",
+      1
+    ],
+    [
+      "MaxV",
+      1
+    ],
+    [
+      "Ultra",
+      1
+    ],
+    [
+      "Heurist",
+      1
+    ]
+  ],
+  "raw": "grounding-20260824-170225.jsonl",
+  "reconcile": "Compare grounded_prompts_billed against the Vertex billing console 'Grounding with Google Search' SKU ~24h from now. That settles the $14 vs $25 question and whether the free monthly allowance applied."
+}

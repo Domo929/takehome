@@ -1,0 +1,148 @@
+{
+  "label": "vertex-http2",
+  "mode": "closed",
+  "provider": {
+    "provider": "gemini",
+    "backend": "vertex",
+    "model": "gemini-2.5-flash",
+    "location": "us-central1",
+    "max_output_tokens": 512,
+    "thinking_budget": 0,
+    "max_connections": 2048,
+    "http2": true,
+    "parallelism": 128,
+    "max_attempts": 4,
+    "attempt_timeout_s": 60.0,
+    "total_deadline_s": 180.0
+  },
+  "corpus": {
+    "size": 200,
+    "fingerprint": "a09f8bd0739f197f",
+    "mean_input_chars": 53.6,
+    "complex_fraction": 0.0
+  },
+  "estimate_usd": 8.432054,
+  "started_at": 1787611222.0036755,
+  "stages": [
+    {
+      "label": "vertex-http2-c256",
+      "mode": "closed",
+      "concurrency": 256,
+      "arrival_rate": 0.0,
+      "duration_s": 30.938,
+      "requests": 1798,
+      "successful": 1737,
+      "error_rate": 0.03393,
+      "throughput_rps": 56.145,
+      "output_tokens_per_s": 8605.6,
+      "latency_ms": {
+        "p50": 3975.1,
+        "p90": 5341.6,
+        "p95": 5778.8,
+        "p99": 6448.6,
+        "max": 12415.0,
+        "mean": 4114.2
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 0,
+      "warmup_s": 10.0,
+      "warmup_requests": 510,
+      "cost_usd": 0.956691,
+      "tokens": {
+        "input": 78838,
+        "output": 373216,
+        "thinking": 0
+      },
+      "errors_by_class": {
+        "": 61
+      },
+      "finish_reasons": {
+        "STOP": 1737,
+        "MAX_TOKENS": 61
+      },
+      "windows": [
+        {
+          "window_start_s": 0.0,
+          "requests": 1626,
+          "successful": 1570,
+          "rps": 52.33,
+          "p50_ms": 3976.0,
+          "p99_ms": 6461.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 30.0,
+          "requests": 172,
+          "successful": 167,
+          "rps": 5.57,
+          "p50_ms": 3967.0,
+          "p99_ms": 6349.0,
+          "errors_by_class": {},
+          "retries": 0
+        }
+      ]
+    },
+    {
+      "label": "vertex-http2-c1024",
+      "mode": "closed",
+      "concurrency": 1024,
+      "arrival_rate": 0.0,
+      "duration_s": 43.524,
+      "requests": 2495,
+      "successful": 2404,
+      "error_rate": 0.03647,
+      "throughput_rps": 55.234,
+      "output_tokens_per_s": 8556.5,
+      "latency_ms": {
+        "p50": 16843.3,
+        "p90": 18345.0,
+        "p95": 18849.9,
+        "p99": 19477.9,
+        "max": 20490.7,
+        "mean": 16548.8
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 0,
+      "warmup_s": 10.0,
+      "warmup_requests": 533,
+      "cost_usd": 1.279847,
+      "tokens": {
+        "input": 103422,
+        "output": 499528,
+        "thinking": 0
+      },
+      "errors_by_class": {
+        "": 91
+      },
+      "finish_reasons": {
+        "STOP": 2404,
+        "MAX_TOKENS": 91
+      },
+      "windows": [
+        {
+          "window_start_s": 0.0,
+          "requests": 2216,
+          "successful": 2133,
+          "rps": 71.1,
+          "p50_ms": 16822.0,
+          "p99_ms": 19463.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 30.0,
+          "requests": 279,
+          "successful": 271,
+          "rps": 9.03,
+          "p50_ms": 16967.0,
+          "p99_ms": 19583.0,
+          "errors_by_class": {},
+          "retries": 0
+        }
+      ]
+    }
+  ],
+  "actual_usd": 2.236538,
+  "finished_at": 1787611316.4984462
+}

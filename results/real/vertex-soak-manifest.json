@@ -1,0 +1,246 @@
+{
+  "label": "vertex-soak",
+  "mode": "closed",
+  "provider": {
+    "provider": "gemini",
+    "backend": "vertex",
+    "model": "gemini-2.5-flash",
+    "location": "us-central1",
+    "max_output_tokens": 512,
+    "thinking_budget": 0,
+    "max_connections": 256,
+    "parallelism": 32,
+    "max_attempts": 4,
+    "attempt_timeout_s": 60.0,
+    "total_deadline_s": 180.0
+  },
+  "corpus": {
+    "size": 200,
+    "fingerprint": "a09f8bd0739f197f",
+    "mean_input_chars": 53.6,
+    "complex_fraction": 0.0
+  },
+  "estimate_usd": 6.050968,
+  "started_at": 1787605138.9592886,
+  "stages": [
+    {
+      "label": "vertex-soak-c64",
+      "mode": "closed",
+      "concurrency": 64,
+      "arrival_rate": 0.0,
+      "duration_s": 522.538,
+      "requests": 19223,
+      "successful": 18581,
+      "error_rate": 0.0334,
+      "throughput_rps": 35.559,
+      "output_tokens_per_s": 5373.9,
+      "latency_ms": {
+        "p50": 1400.9,
+        "p90": 3038.4,
+        "p95": 3539.6,
+        "p99": 7032.9,
+        "max": 13321.6,
+        "mean": 1627.5
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 9,
+      "cost_usd": 8.038912,
+      "tokens": {
+        "input": 656398,
+        "output": 3136797,
+        "thinking": 0
+      },
+      "errors_by_class": {
+        "": 642
+      },
+      "finish_reasons": {
+        "STOP": 18581,
+        "MAX_TOKENS": 642
+      },
+      "windows": [
+        {
+          "window_start_s": 0.0,
+          "requests": 1211,
+          "successful": 1169,
+          "rps": 38.97,
+          "p50_ms": 1392.0,
+          "p99_ms": 6480.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 30.0,
+          "requests": 1226,
+          "successful": 1181,
+          "rps": 39.37,
+          "p50_ms": 1281.0,
+          "p99_ms": 6988.0,
+          "errors_by_class": {},
+          "retries": 1
+        },
+        {
+          "window_start_s": 60.0,
+          "requests": 1167,
+          "successful": 1130,
+          "rps": 37.67,
+          "p50_ms": 1411.0,
+          "p99_ms": 4199.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 90.0,
+          "requests": 1150,
+          "successful": 1115,
+          "rps": 37.17,
+          "p50_ms": 1433.0,
+          "p99_ms": 4102.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 120.0,
+          "requests": 1125,
+          "successful": 1081,
+          "rps": 36.03,
+          "p50_ms": 1397.0,
+          "p99_ms": 4378.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 150.0,
+          "requests": 1182,
+          "successful": 1138,
+          "rps": 37.93,
+          "p50_ms": 1370.0,
+          "p99_ms": 4048.0,
+          "errors_by_class": {},
+          "retries": 1
+        },
+        {
+          "window_start_s": 180.0,
+          "requests": 1175,
+          "successful": 1135,
+          "rps": 37.83,
+          "p50_ms": 1387.0,
+          "p99_ms": 4032.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 210.0,
+          "requests": 1126,
+          "successful": 1090,
+          "rps": 36.33,
+          "p50_ms": 1423.0,
+          "p99_ms": 6619.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 240.0,
+          "requests": 1132,
+          "successful": 1095,
+          "rps": 36.5,
+          "p50_ms": 1452.0,
+          "p99_ms": 4339.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 270.0,
+          "requests": 1112,
+          "successful": 1081,
+          "rps": 36.03,
+          "p50_ms": 1451.0,
+          "p99_ms": 4602.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 300.0,
+          "requests": 1034,
+          "successful": 993,
+          "rps": 33.1,
+          "p50_ms": 1457.0,
+          "p99_ms": 8621.0,
+          "errors_by_class": {},
+          "retries": 1
+        },
+        {
+          "window_start_s": 330.0,
+          "requests": 1166,
+          "successful": 1128,
+          "rps": 37.6,
+          "p50_ms": 1319.0,
+          "p99_ms": 4373.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 360.0,
+          "requests": 1069,
+          "successful": 1030,
+          "rps": 34.33,
+          "p50_ms": 1440.0,
+          "p99_ms": 7885.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 390.0,
+          "requests": 1127,
+          "successful": 1094,
+          "rps": 36.47,
+          "p50_ms": 1405.0,
+          "p99_ms": 7913.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 420.0,
+          "requests": 1118,
+          "successful": 1070,
+          "rps": 35.67,
+          "p50_ms": 1389.0,
+          "p99_ms": 7687.0,
+          "errors_by_class": {},
+          "retries": 2
+        },
+        {
+          "window_start_s": 450.0,
+          "requests": 998,
+          "successful": 973,
+          "rps": 32.43,
+          "p50_ms": 1498.0,
+          "p99_ms": 9759.0,
+          "errors_by_class": {},
+          "retries": 2
+        },
+        {
+          "window_start_s": 480.0,
+          "requests": 1104,
+          "successful": 1077,
+          "rps": 35.9,
+          "p50_ms": 1401.0,
+          "p99_ms": 7784.0,
+          "errors_by_class": {},
+          "retries": 2
+        },
+        {
+          "window_start_s": 510.0,
+          "requests": 1,
+          "successful": 1,
+          "rps": 0.03,
+          "p50_ms": 378.0,
+          "p99_ms": 378.0,
+          "errors_by_class": {},
+          "retries": 0
+        }
+      ]
+    }
+  ],
+  "actual_usd": 8.038912,
+  "finished_at": 1787605661.6340854
+}

@@ -1,0 +1,8 @@
+Connection pool ceiling, fake Vertex at a flat 500 ms, concurrency 64, 30 s per stage.
+Reproduce: make mock-up && make pool-experiment (see FINDINGS section 3).
+
+ pool     rps   p50_ms  mean_ms   p90_ms    p99_ms  pool_sat
+    8    15.3      516     3946     9684     11874       8.0
+   16    30.6      513     2036     5249      6702       4.0
+   64   120.1      511      528      519      1248       1.0
+  128   120.7      510      524      519      1091       0.5

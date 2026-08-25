@@ -1,0 +1,389 @@
+{
+  "experiment": "temperature",
+  "question": "Which robot vacuum brands are worth considering?",
+  "started_utc": "2026-08-25T20:05:46Z",
+  "duration_s": 47.5,
+  "project": "evertune-tests",
+  "location": "us-central1",
+  "model": "gemini-2.5-flash",
+  "samples_per_temperature": 50,
+  "requests": 250,
+  "modelled_cost_usd": 0.072495,
+  "by_temperature": [
+    {
+      "temperature": 0.0,
+      "n": 50,
+      "errors": 0,
+      "distinct_brands": 10,
+      "distinct_answer_brand_sets": 5,
+      "mean_brands_per_answer": 5.98,
+      "entropy_bits": 2.713,
+      "cross_batch_drift": 0.012,
+      "mean_output_tokens": 99.6,
+      "truncated": 0,
+      "cost_usd": 0.01292,
+      "brand_counts": [
+        [
+          "irobot",
+          50
+        ],
+        [
+          "roborock",
+          50
+        ],
+        [
+          "roomba",
+          50
+        ],
+        [
+          "eufy",
+          49
+        ],
+        [
+          "shark",
+          48
+        ],
+        [
+          "anker",
+          46
+        ],
+        [
+          "deebot",
+          2
+        ],
+        [
+          "ecovacs",
+          2
+        ],
+        [
+          "shark ai",
+          1
+        ],
+        [
+          "wyze",
+          1
+        ]
+      ]
+    },
+    {
+      "temperature": 0.35,
+      "n": 50,
+      "errors": 0,
+      "distinct_brands": 16,
+      "distinct_answer_brand_sets": 19,
+      "mean_brands_per_answer": 6.18,
+      "entropy_bits": 3.31,
+      "cross_batch_drift": 0.0525,
+      "mean_output_tokens": 107.1,
+      "truncated": 0,
+      "cost_usd": 0.013848,
+      "brand_counts": [
+        [
+          "irobot",
+          50
+        ],
+        [
+          "roborock",
+          50
+        ],
+        [
+          "roomba",
+          50
+        ],
+        [
+          "eufy",
+          44
+        ],
+        [
+          "shark",
+          40
+        ],
+        [
+          "anker",
+          12
+        ],
+        [
+          "deebot",
+          11
+        ],
+        [
+          "ecovacs",
+          11
+        ],
+        [
+          "samsung",
+          11
+        ],
+        [
+          "neato",
+          10
+        ],
+        [
+          "wyze",
+          7
+        ],
+        [
+          "shark ai",
+          6
+        ],
+        [
+          "lg",
+          4
+        ],
+        [
+          "bissell",
+          1
+        ],
+        [
+          "yeedi",
+          1
+        ],
+        [
+          "narwal",
+          1
+        ]
+      ]
+    },
+    {
+      "temperature": 0.7,
+      "n": 50,
+      "errors": 0,
+      "distinct_brands": 14,
+      "distinct_answer_brand_sets": 15,
+      "mean_brands_per_answer": 5.6,
+      "entropy_bits": 3.123,
+      "cross_batch_drift": 0.0514,
+      "mean_output_tokens": 122.0,
+      "truncated": 0,
+      "cost_usd": 0.01571,
+      "brand_counts": [
+        [
+          "irobot",
+          50
+        ],
+        [
+          "roborock",
+          50
+        ],
+        [
+          "roomba",
+          50
+        ],
+        [
+          "eufy",
+          40
+        ],
+        [
+          "shark",
+          31
+        ],
+        [
+          "shark ai",
+          17
+        ],
+        [
+          "deebot",
+          12
+        ],
+        [
+          "ecovacs",
+          12
+        ],
+        [
+          "anker",
+          7
+        ],
+        [
+          "samsung",
+          3
+        ],
+        [
+          "wyze",
+          3
+        ],
+        [
+          "neato",
+          2
+        ],
+        [
+          "xiaomi",
+          2
+        ],
+        [
+          "lg",
+          1
+        ]
+      ]
+    },
+    {
+      "temperature": 1.0,
+      "n": 50,
+      "errors": 0,
+      "distinct_brands": 16,
+      "distinct_answer_brand_sets": 18,
+      "mean_brands_per_answer": 5.68,
+      "entropy_bits": 3.23,
+      "cross_batch_drift": 0.04,
+      "mean_output_tokens": 108.1,
+      "truncated": 0,
+      "cost_usd": 0.01398,
+      "brand_counts": [
+        [
+          "irobot",
+          50
+        ],
+        [
+          "roborock",
+          50
+        ],
+        [
+          "roomba",
+          50
+        ],
+        [
+          "eufy",
+          33
+        ],
+        [
+          "shark",
+          25
+        ],
+        [
+          "deebot",
+          23
+        ],
+        [
+          "ecovacs",
+          22
+        ],
+        [
+          "shark ai",
+          9
+        ],
+        [
+          "anker",
+          6
+        ],
+        [
+          "neato",
+          4
+        ],
+        [
+          "wyze",
+          4
+        ],
+        [
+          "samsung",
+          2
+        ],
+        [
+          "360",
+          2
+        ],
+        [
+          "dyson",
+          2
+        ],
+        [
+          "lg",
+          1
+        ],
+        [
+          "yeedi",
+          1
+        ]
+      ]
+    },
+    {
+      "temperature": 1.4,
+      "n": 50,
+      "errors": 0,
+      "distinct_brands": 19,
+      "distinct_answer_brand_sets": 22,
+      "mean_brands_per_answer": 5.58,
+      "entropy_bits": 3.282,
+      "cross_batch_drift": 0.04,
+      "mean_output_tokens": 124.6,
+      "truncated": 0,
+      "cost_usd": 0.016037,
+      "brand_counts": [
+        [
+          "irobot",
+          50
+        ],
+        [
+          "roborock",
+          50
+        ],
+        [
+          "roomba",
+          50
+        ],
+        [
+          "eufy",
+          39
+        ],
+        [
+          "shark",
+          28
+        ],
+        [
+          "deebot",
+          13
+        ],
+        [
+          "ecovacs",
+          13
+        ],
+        [
+          "anker",
+          8
+        ],
+        [
+          "360",
+          4
+        ],
+        [
+          "dyson",
+          4
+        ],
+        [
+          "neato",
+          4
+        ],
+        [
+          "shark ai",
+          4
+        ],
+        [
+          "samsung",
+          3
+        ],
+        [
+          "wyze",
+          3
+        ],
+        [
+          "dreame",
+          2
+        ],
+        [
+          "bissell",
+          1
+        ],
+        [
+          "lg",
+          1
+        ],
+        [
+          "narwal",
+          1
+        ],
+        [
+          "yeedi",
+          1
+        ]
+      ]
+    }
+  ]
+}

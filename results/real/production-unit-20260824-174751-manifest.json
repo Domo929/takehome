@@ -1,0 +1,184 @@
+{
+  "experiment": "production-unit",
+  "question": "Which robot vacuum brands are worth considering?",
+  "started_utc": "2026-08-24T23:47:13Z",
+  "duration_s": 38.4,
+  "project": "evertune-tests",
+  "location": "us-central1",
+  "model": "gemini-2.5-flash",
+  "max_output_tokens": 1536,
+  "concurrency": 25,
+  "requests": 200,
+  "modelled_cost_usd": 2.669033,
+  "grounded_prompts_billed": 100,
+  "grounding_rate_assumed_usd_per_1k": 25.0,
+  "rate_limited_during_grounded_arm": 0.0,
+  "ungrounded": {
+    "n": 100,
+    "errors": 0,
+    "p50_latency_ms": 1613.3,
+    "p95_latency_ms": 2675.8,
+    "p99_latency_ms": 4591.8,
+    "mean_output_tokens": 119.6,
+    "truncated": 0,
+    "degraded": 0,
+    "retried": 0,
+    "cost_usd": 0.03083
+  },
+  "grounded": {
+    "n": 100,
+    "errors": 0,
+    "p50_latency_ms": 5908.7,
+    "p95_latency_ms": 11150.8,
+    "p99_latency_ms": 13722.2,
+    "mean_output_tokens": 549.1,
+    "truncated": 1,
+    "degraded": 0,
+    "retried": 0,
+    "cost_usd": 2.638203
+  },
+  "grounded_stability": {
+    "samples_with_sources": 100,
+    "distinct_source_sets": 100,
+    "distinct_sources_total": 852,
+    "mean_pairwise_source_jaccard": 0.0,
+    "top_sources": [
+      [
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEdlfQrP88ypRySaFwid2_YVO9kUkJS-zqjG7pcSsvYN_eZPDwhI202MbZ5CIgszaxkE_rgq1lYQWsUdps9ISedI-q0_bpjxNkvr26x90WPYtpq4Hg2JDircX28SJh60JwJiYz8CIMqU8E-uLKsHOes26wlaNwZCN6tKMfxzJAmHx1fFpEW5dr3CX4Hhu223zDCMsCn4UyUc07ppHr1j85TMkwLmP_RXHW0kTkIGsKC8w8ggR-XsL4=",
+        1
+      ],
+      [
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFPy21MAT6-H8DDexEdq2J9F7B5S_DkVaBS6Ic5RD6TZLlLGvv_1-kjRrlS5UD6l44S55bieWt5ILC3S4xsf6PQwPK4cgb0q_vbhNBCZI8T3rOFNce79wKqDeY4Ekt4l4MrzHpqzM3ukWMUVXfm",
+        1
+      ],
+      [
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFp3RkaZx1TTnd-EQj0SEKyi1xSwxuzXdMt9ZGSseThjyXiTSwgeVFkeNxHMhuSRzClmVfK0Yo4bV33jSmUuI8O54vrj7XLjTfPN3bo2OEYA8eIZufXAy51_pnNu5fX3HWdwHU_zMo0_uBDw6Lt6W-unQ==",
+        1
+      ],
+      [
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGjtzx4YG1cxYsF4ALjCK2jmEHJ2Z-T6HYCyxtd6-2FyyNZU6QtjUn_KxMCKjiMUQNll-OiHcla4hPvv6wYKqHpTc6PUVkOUREO80fIzj60vDx-opfIIM-FjbQqYm9RNojOsvNqkyZnirFWGQu23nZ_ViAqMQMLju0ZHWQPNUQfc5xcVeVGiR5enIU=",
+        1
+      ],
+      [
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHV1etgBU7M9x8snh2He1VL5Rf8vyVn82qpV5fvoV-dxXVP72DHT8T3rK8Hikw1iiOPVph9fOX6Mi4fxVTVaKwxg0fu0bzdoDNsKh26DyFslcl8lMW5ZKQEc-uXAp6wU4OWfcQm_atk5dCGpWYlxGON_68gskHFxx-zs9VI-ZFtMjSwjC-muOq5ciV8I8_g3s-ZylG5lji08Hybu3yTgzNo0QAoAOGEzYaPwQ0=",
+        1
+      ]
+    ],
+    "distinct_query_sets": 89,
+    "total_searches_issued": 428,
+    "mean_pairwise_query_jaccard": 0.087,
+    "brand_frequency": [
+      [
+        "eufy",
+        99
+      ],
+      [
+        "roomba",
+        98
+      ],
+      [
+        "dreame",
+        97
+      ],
+      [
+        "ecovacs",
+        93
+      ],
+      [
+        "roborock",
+        90
+      ],
+      [
+        "irobot",
+        85
+      ],
+      [
+        "shark",
+        80
+      ],
+      [
+        "deebot",
+        58
+      ],
+      [
+        "narwal",
+        36
+      ],
+      [
+        "samsung",
+        33
+      ],
+      [
+        "dyson",
+        19
+      ],
+      [
+        "xiaomi",
+        14
+      ]
+    ],
+    "distinct_brand_sets": 55
+  },
+  "ungrounded_stability": {
+    "samples_with_sources": 0,
+    "distinct_source_sets": 0,
+    "distinct_sources_total": 0,
+    "mean_pairwise_source_jaccard": null,
+    "top_sources": [],
+    "distinct_query_sets": 0,
+    "total_searches_issued": 0,
+    "mean_pairwise_query_jaccard": null,
+    "brand_frequency": [
+      [
+        "roborock",
+        100
+      ],
+      [
+        "roomba",
+        100
+      ],
+      [
+        "irobot",
+        100
+      ],
+      [
+        "eufy",
+        65
+      ],
+      [
+        "deebot",
+        56
+      ],
+      [
+        "shark",
+        56
+      ],
+      [
+        "ecovacs",
+        52
+      ],
+      [
+        "anker",
+        18
+      ],
+      [
+        "neato",
+        11
+      ],
+      [
+        "wyze",
+        7
+      ],
+      [
+        "samsung",
+        6
+      ],
+      [
+        "dreame",
+        5
+      ]
+    ],
+    "distinct_brand_sets": 28
+  },
+  "raw": "production-unit-20260824-174751.jsonl"
+}

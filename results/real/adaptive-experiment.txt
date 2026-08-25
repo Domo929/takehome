@@ -1,0 +1,31 @@
+  running fixed-high (64) ...
+  running fixed-low (8) ...
+  running adaptive ...
+
+============================================================================================
+
+HEALTHY
+  config                  rps      p50       p99   errors    shed   limit
+  fixed-high (64)       356.2      239       818       50       0       -
+  fixed-low (8)          48.6     1941      2349        2       0       -
+  adaptive              181.2      163       548       23   64488      42
+
+DEGRADED
+  config                  rps      p50       p99   errors    shed   limit
+  fixed-high (64)        15.7     3139      6291     1468       0       -
+  fixed-low (8)          33.8     2628      3978        5       0       -
+  adaptive               19.2      169      4207        5   91482      11
+
+RECOVERED
+  config                  rps      p50       p99   errors    shed   limit
+  fixed-high (64)       357.6      241      1453       51       0       -
+  fixed-low (8)          48.7     1930      3202       12       0       -
+  adaptive              215.6      161       693       31   57711      48
+
+============================================================================================
+
+Totals across all phases (what production actually experiences):
+  config               total ok   total errors   worst p99
+  fixed-high (64)          8755           1569       6291ms
+  fixed-low (8)            1574             19       3978ms
+  adaptive                 4993             59       4207ms

@@ -1,0 +1,443 @@
+{
+  "label": "vertex-knee",
+  "mode": "closed",
+  "provider": {
+    "provider": "gemini",
+    "backend": "vertex",
+    "model": "gemini-2.5-flash",
+    "location": "us-central1",
+    "max_output_tokens": 512,
+    "thinking_budget": 0,
+    "max_connections": 256,
+    "parallelism": 64,
+    "max_attempts": 4,
+    "attempt_timeout_s": 60.0,
+    "total_deadline_s": 180.0
+  },
+  "corpus": {
+    "size": 200,
+    "fingerprint": "a09f8bd0739f197f",
+    "mean_input_chars": 53.6,
+    "complex_fraction": 0.0
+  },
+  "estimate_usd": 4.81367,
+  "started_at": 1787609300.994989,
+  "stages": [
+    {
+      "label": "vertex-knee-c8",
+      "mode": "closed",
+      "concurrency": 8,
+      "arrival_rate": 0.0,
+      "duration_s": 78.837,
+      "requests": 338,
+      "successful": 331,
+      "error_rate": 0.02071,
+      "throughput_rps": 4.199,
+      "output_tokens_per_s": 682.6,
+      "latency_ms": {
+        "p50": 1534.2,
+        "p90": 3316.9,
+        "p95": 3808.5,
+        "p99": 7570.9,
+        "max": 9791.8,
+        "mean": 1793.2
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 0,
+      "warmup_s": 20.0,
+      "warmup_requests": 89,
+      "cost_usd": 0.179974,
+      "tokens": {
+        "input": 14606,
+        "output": 70237,
+        "thinking": 0
+      },
+      "errors_by_class": {
+        "": 7
+      },
+      "finish_reasons": {
+        "STOP": 331,
+        "MAX_TOKENS": 7
+      },
+      "windows": [
+        {
+          "window_start_s": 0.0,
+          "requests": 126,
+          "successful": 125,
+          "rps": 4.17,
+          "p50_ms": 1543.0,
+          "p99_ms": 7571.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 30.0,
+          "requests": 138,
+          "successful": 136,
+          "rps": 4.53,
+          "p50_ms": 1476.0,
+          "p99_ms": 8907.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 60.0,
+          "requests": 74,
+          "successful": 70,
+          "rps": 2.33,
+          "p50_ms": 1657.0,
+          "p99_ms": 4199.0,
+          "errors_by_class": {},
+          "retries": 0
+        }
+      ]
+    },
+    {
+      "label": "vertex-knee-c16",
+      "mode": "closed",
+      "concurrency": 16,
+      "arrival_rate": 0.0,
+      "duration_s": 78.929,
+      "requests": 657,
+      "successful": 626,
+      "error_rate": 0.04718,
+      "throughput_rps": 7.931,
+      "output_tokens_per_s": 1221.5,
+      "latency_ms": {
+        "p50": 1478.9,
+        "p90": 3171.0,
+        "p95": 3786.4,
+        "p99": 8865.8,
+        "max": 11049.9,
+        "mean": 1794.8
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 0,
+      "warmup_s": 20.0,
+      "warmup_requests": 164,
+      "cost_usd": 0.352509,
+      "tokens": {
+        "input": 28054,
+        "output": 137637,
+        "thinking": 0
+      },
+      "errors_by_class": {
+        "": 31
+      },
+      "finish_reasons": {
+        "MAX_TOKENS": 31,
+        "STOP": 626
+      },
+      "windows": [
+        {
+          "window_start_s": 0.0,
+          "requests": 229,
+          "successful": 215,
+          "rps": 7.17,
+          "p50_ms": 1566.0,
+          "p99_ms": 8518.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 30.0,
+          "requests": 269,
+          "successful": 258,
+          "rps": 8.6,
+          "p50_ms": 1427.0,
+          "p99_ms": 8866.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 60.0,
+          "requests": 159,
+          "successful": 153,
+          "rps": 5.1,
+          "p50_ms": 1504.0,
+          "p99_ms": 9253.0,
+          "errors_by_class": {},
+          "retries": 0
+        }
+      ]
+    },
+    {
+      "label": "vertex-knee-c32",
+      "mode": "closed",
+      "concurrency": 32,
+      "arrival_rate": 0.0,
+      "duration_s": 77.992,
+      "requests": 1386,
+      "successful": 1339,
+      "error_rate": 0.03391,
+      "throughput_rps": 17.169,
+      "output_tokens_per_s": 2588.3,
+      "latency_ms": {
+        "p50": 1473.2,
+        "p90": 3154.5,
+        "p95": 3608.9,
+        "p99": 8049.3,
+        "max": 12298.6,
+        "mean": 1705.2
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 0,
+      "warmup_s": 20.0,
+      "warmup_requests": 365,
+      "cost_usd": 0.727806,
+      "tokens": {
+        "input": 59788,
+        "output": 283948,
+        "thinking": 0
+      },
+      "errors_by_class": {
+        "": 47
+      },
+      "finish_reasons": {
+        "STOP": 1339,
+        "MAX_TOKENS": 47
+      },
+      "windows": [
+        {
+          "window_start_s": 0.0,
+          "requests": 518,
+          "successful": 497,
+          "rps": 16.57,
+          "p50_ms": 1558.0,
+          "p99_ms": 8435.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 30.0,
+          "requests": 545,
+          "successful": 526,
+          "rps": 17.53,
+          "p50_ms": 1426.0,
+          "p99_ms": 4257.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 60.0,
+          "requests": 323,
+          "successful": 316,
+          "rps": 10.53,
+          "p50_ms": 1414.0,
+          "p99_ms": 8252.0,
+          "errors_by_class": {},
+          "retries": 0
+        }
+      ]
+    },
+    {
+      "label": "vertex-knee-c64",
+      "mode": "closed",
+      "concurrency": 64,
+      "arrival_rate": 0.0,
+      "duration_s": 81.163,
+      "requests": 3021,
+      "successful": 2934,
+      "error_rate": 0.0288,
+      "throughput_rps": 36.15,
+      "output_tokens_per_s": 5566.1,
+      "latency_ms": {
+        "p50": 1410.1,
+        "p90": 3016.3,
+        "p95": 3449.1,
+        "p99": 4133.3,
+        "max": 10282.5,
+        "mean": 1579.0
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 0,
+      "warmup_s": 20.0,
+      "warmup_requests": 764,
+      "cost_usd": 1.575284,
+      "tokens": {
+        "input": 129240,
+        "output": 614605,
+        "thinking": 0
+      },
+      "errors_by_class": {
+        "": 87
+      },
+      "finish_reasons": {
+        "STOP": 2934,
+        "MAX_TOKENS": 87
+      },
+      "windows": [
+        {
+          "window_start_s": 0.0,
+          "requests": 1001,
+          "successful": 975,
+          "rps": 32.5,
+          "p50_ms": 1452.0,
+          "p99_ms": 4133.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 30.0,
+          "requests": 1183,
+          "successful": 1147,
+          "rps": 38.23,
+          "p50_ms": 1399.0,
+          "p99_ms": 4013.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 60.0,
+          "requests": 837,
+          "successful": 812,
+          "rps": 27.07,
+          "p50_ms": 1377.0,
+          "p99_ms": 4552.0,
+          "errors_by_class": {},
+          "retries": 0
+        }
+      ]
+    },
+    {
+      "label": "vertex-knee-c96",
+      "mode": "closed",
+      "concurrency": 96,
+      "arrival_rate": 0.0,
+      "duration_s": 79.612,
+      "requests": 4427,
+      "successful": 4252,
+      "error_rate": 0.03953,
+      "throughput_rps": 53.409,
+      "output_tokens_per_s": 8071.4,
+      "latency_ms": {
+        "p50": 1395.7,
+        "p90": 2953.8,
+        "p95": 3467.9,
+        "p99": 6349.5,
+        "max": 11990.7,
+        "mean": 1590.5
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 0,
+      "warmup_s": 20.0,
+      "warmup_requests": 1096,
+      "cost_usd": 2.316786,
+      "tokens": {
+        "input": 188604,
+        "output": 904082,
+        "thinking": 0
+      },
+      "errors_by_class": {
+        "": 175
+      },
+      "finish_reasons": {
+        "STOP": 4252,
+        "MAX_TOKENS": 175
+      },
+      "windows": [
+        {
+          "window_start_s": 0.0,
+          "requests": 1396,
+          "successful": 1332,
+          "rps": 44.4,
+          "p50_ms": 1429.0,
+          "p99_ms": 6130.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 30.0,
+          "requests": 1745,
+          "successful": 1679,
+          "rps": 55.97,
+          "p50_ms": 1394.0,
+          "p99_ms": 6437.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 60.0,
+          "requests": 1286,
+          "successful": 1241,
+          "rps": 41.37,
+          "p50_ms": 1346.0,
+          "p99_ms": 7498.0,
+          "errors_by_class": {},
+          "retries": 0
+        }
+      ]
+    },
+    {
+      "label": "vertex-knee-c128",
+      "mode": "closed",
+      "concurrency": 128,
+      "arrival_rate": 0.0,
+      "duration_s": 71.188,
+      "requests": 5411,
+      "successful": 5243,
+      "error_rate": 0.03105,
+      "throughput_rps": 73.65,
+      "output_tokens_per_s": 11364.6,
+      "latency_ms": {
+        "p50": 1328.4,
+        "p90": 2888.9,
+        "p95": 3282.3,
+        "p99": 3813.4,
+        "max": 9934.9,
+        "mean": 1486.5
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 0,
+      "warmup_s": 20.0,
+      "warmup_requests": 1542,
+      "cost_usd": 2.9296,
+      "tokens": {
+        "input": 237409,
+        "output": 1143351,
+        "thinking": 0
+      },
+      "errors_by_class": {
+        "": 168
+      },
+      "finish_reasons": {
+        "STOP": 5243,
+        "MAX_TOKENS": 168
+      },
+      "windows": [
+        {
+          "window_start_s": 0.0,
+          "requests": 2312,
+          "successful": 2229,
+          "rps": 74.3,
+          "p50_ms": 1339.0,
+          "p99_ms": 3759.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 30.0,
+          "requests": 2462,
+          "successful": 2397,
+          "rps": 79.9,
+          "p50_ms": 1326.0,
+          "p99_ms": 3900.0,
+          "errors_by_class": {},
+          "retries": 0
+        },
+        {
+          "window_start_s": 60.0,
+          "requests": 637,
+          "successful": 617,
+          "rps": 20.57,
+          "p50_ms": 1300.0,
+          "p99_ms": 3814.0,
+          "errors_by_class": {},
+          "retries": 0
+        }
+      ]
+    }
+  ],
+  "actual_usd": 8.08196,
+  "finished_at": 1787609888.832801
+}
