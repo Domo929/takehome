@@ -47,6 +47,9 @@ The four that most changed what I would build:
   conditions. §0d
 - **The concurrency ceiling is ours, not Vertex's.** §6g
 - **Dynamic thinking is the SDK default and costs ~4x.** §4
+- **Temperature is a product parameter, not a technical one** — a brand's measured
+  share swings 6.5x across the range, and `temperature=0` is neither deterministic nor
+  safer. §0e
 
 Reproduce any ratio without spending anything:
 

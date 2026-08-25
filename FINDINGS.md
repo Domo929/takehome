@@ -529,6 +529,121 @@ result I wanted and not one I could have assumed.
 
 ---
 
+## 0e. Temperature is a product parameter, not a technical one *(measured)*
+
+Everything in this document ran at `temperature=0.7`. That number came from convention
+— the shipped `together.py` takes temperature from the caller and nothing justified a
+value. Since Evertune samples each prompt 100 times and reads the distribution,
+temperature controls how much those samples differ, so it deserved better than a
+default.
+
+One prompt, 50 samples at each of five temperatures, ungrounded, `us-central1`.
+**$0.07.** Raw data in `results/real/temperature-*.jsonl`.
+
+| Temp | Distinct brands (95% CI) | Distinct answer sets | Cross-batch drift | Mean out tok |
+|---|---|---|---|---|
+| 0.00 | 10 [6, 10] | 5 | **0.012** | 100 |
+| 0.35 | 16 [13, 16] | 19 | 0.052 | 107 |
+| **0.70** | 14 [11, 14] | 15 | 0.051 | 122 |
+| 1.00 | 16 [11, 16] | 18 | 0.040 | 108 |
+| 1.40 | 19 [15, 19] | 22 | 0.040 | 125 |
+
+*Cross-batch drift is the mean absolute change in per-brand mention rate between two
+independent 25-sample halves at the same temperature. Nothing about the world changed
+between them, so it is the measurement's own noise floor.*
+
+### Temperature 0 is not deterministic
+
+**8 distinct answer strings out of 50 samples at `temperature=0.0`**, and 5 distinct
+brand sets. Not a large spread — one set covers 45 of 50 — but not zero either, and
+"temperature 0 means reproducible" is a common enough assumption to be worth
+falsifying. Anyone using `temperature=0` as a way to get a stable baseline for
+regression-testing prompts will get a baseline that quietly moves.
+
+### The finding that matters: measured brand share swings 6.5x on this setting alone
+
+| Brand | 0.00 | 0.35 | 0.70 | 1.00 | 1.40 |
+|---|---|---|---|---|---|
+| **Anker** | **92%** | 24% | **14%** | 12% | 16% |
+| Shark | 96% | 80% | 62% | 50% | 56% |
+| Eufy | 98% | 88% | 80% | 66% | 78% |
+| **Ecovacs** | **4%** | 22% | 24% | **44%** | 26% |
+| **Deebot** | **4%** | 22% | 24% | **46%** | 26% |
+| Neato | 0% | 20% | 4% | 8% | 8% |
+
+Anker at 92% [84, 98] versus 14% [6, 24] is not overlapping and not noise. **A brand's
+measured visibility changes by 6.5x depending on a parameter nobody documented**, and
+the direction is not uniform: Anker, Shark and Eufy fall as temperature rises while
+Ecovacs and Deebot climb roughly 10x. This is not "more temperature, more noise" — it
+is a systematic reshaping of the numbers that are the product's output.
+
+Rank correlation between temperature settings stays high (Spearman 0.81–0.95), so the
+rough *ordering* survives. It is the magnitudes that move, and magnitudes are what a
+brand-visibility report actually states.
+
+### Why Anker moves: phrasing, not belief
+
+Reading the raw answers, Anker is almost never a standalone recommendation. It appears
+as a parenthetical attribution:
+
+```
+temperature=0.0   "*   **Eufy (Anker):** RoboVac X8 Hybrid, RoboVac G20 Hybrid"
+temperature=0.7   "* **Eufy:** reliable and affordable robot vacuums"
+```
+
+At 0.0 the model writes the parent company 46 times in 50. At 0.7 it writes it 7 times
+in 50. **The model's belief about Eufy barely moved (98% → 80%); what changed is
+whether it bothered to name the parent company.**
+
+That generalises past this one brand. **Temperature changes phrasing conventions, and
+phrasing conventions are exactly what an extraction pipeline reads.** Any brand whose
+visibility depends on being named in an aside — a parent company, a sub-brand, an
+"also known as" — is far more temperature-sensitive than a brand named directly. That
+is a systematic bias in favour of headline brands, and it is invisible unless someone
+looks at the raw text.
+
+It also compounds the extraction warning in §0c: grounded answers change *shape*,
+temperature changes *phrasing*, and both are read by the same downstream parser.
+
+### The decision
+
+Stated before the run: pick the lowest temperature at which coverage stops growing.
+
+Coverage jumps from 0.0 (10 brands) to 0.35 (16), then the intervals for 0.35, 0.70
+and 1.00 overlap so heavily that nothing distinguishes them at n=50. Drift is flat
+across all of them. **So the rule points at ~0.35, and 0.7 sits inside the same
+plateau.**
+
+The practical conclusions, in order of importance:
+
+1. **`temperature=0.0` is actively wrong for this product.** It cuts coverage from 16
+   brands to 10, drops Ecovacs and Deebot to 4%, and inflates whatever the model's
+   single most confident phrasing happens to be. The apparent "stability" is a
+   narrower measurement, not a better one.
+2. **0.7 is defensible, and it was still a guess.** Anywhere in [0.35, 1.0] measures
+   about the same thing here, so the value is not wrong — but it was chosen by
+   convention and it happens to land in a safe region rather than because anyone
+   checked. This section is that check.
+3. **Whatever value is chosen has to be frozen and versioned with the results.**
+   Changing it silently rewrites every brand's history: a report saying "Anker: 92%"
+   and one saying "Anker: 14%" can be produced from the same model, the same prompt
+   and the same day. A brand-visibility time series that does not record its
+   temperature is not a time series, it is two different measurements plotted on one
+   axis.
+
+The provider now takes temperature per call, `--temperature` is a harness flag,
+`TEMPERATURE` is an env knob in both k6 scripts, and every run manifest records it.
+
+### What this does not settle
+
+One prompt, one category, n=50. The 6.5x Anker swing is solid, but whether the
+*magnitude* of temperature sensitivity generalises across categories is untested —
+plausibly it is largest where parent/sub-brand relationships exist, and smaller in
+categories with flat brand structures. Worth 20 prompts x 2 temperatures (~$0.03) if
+the number is going to be relied on.
+
+---
+
 ## 1. The model retires 2026-10-16 — noted, not blocking
 
 Gemini 2.5 Flash on Vertex is scheduled for retirement on **2026-10-16**, confirmed
@@ -1873,6 +1988,13 @@ makes the boundary observable; neither soak ran long enough to cross it.
 
 ## 9. Open questions and things still to confirm
 
+~~**Temperature is unmeasured.**~~ **Measured — see §0e.** Brand share swings up to
+6.5x across the range, `temperature=0` is neither deterministic nor safer, and the
+mechanism is phrasing rather than belief. The remaining gap is whether the magnitude
+generalises across categories.
+
+<details><summary>Original open question, kept for the reasoning</summary>
+
 **Temperature is unmeasured, and it is the one remaining parameter that touches the
 product directly.** Everything here ran at 0.7, which is a convention I inherited
 rather than a result — the shipped `together.py` takes temperature as a caller
@@ -1895,6 +2017,8 @@ stability across two independent batches at each setting, and answer entropy. Th
 decision rule stated in advance: pick the lowest temperature whose brand set stops
 growing, since past that point extra spread is noise rather than coverage. 250
 requests, roughly $0.08.
+
+</details>
 
 **Grounding rate reconciliation.** §0c billed 20 grounded prompts on 2026-08-24 and
 recorded the count in its manifest. Comparing that against the "Grounding with Google
