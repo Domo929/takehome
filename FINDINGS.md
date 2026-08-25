@@ -410,7 +410,7 @@ the web did. For a product whose output is a time series of brand mentions, that
 distinction is the difference between a signal and an artifact.
 
 Cost accounting adds the SKU fee for grounded requests, so `llm_spend_usd_total` does
-not understate a grounded run by 88x.
+not understate a grounded run by 123x.
 
 ### What §4 is still good for
 
@@ -917,7 +917,7 @@ async def ask_generic_question(..., *, grounded: bool = False)
 - **Additive only.** The original three fields keep their names, order and types.
   Every added field has a default, so `SimpleResponse("hi", 1, 2)` still works.
 - **Keyword-only, defaulting False.** Existing positional callers are untouched, and
-  a feature costing ~88x per request is never a silent default.
+  a feature costing ~123x per request is never a silent default.
 - **The response reports what happened, not what was requested.** This is the
   important one. Asking for grounding does not guarantee it: the model can decline,
   retrieval can fail, and the request still returns 200 with a plausible answer. A
