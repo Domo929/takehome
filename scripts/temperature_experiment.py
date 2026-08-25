@@ -1,45 +1,16 @@
-#!/usr/bin/env python3
-"""Does temperature 0.7 hold up, or was it just the number everyone uses?
+"""Sweep temperature across categories and measure what it does to brand share.
 
-Why this matters more here than usual
--------------------------------------
-Evertune samples each prompt 100 times and reads the distribution. Temperature is the
-knob that decides how much those 100 samples differ from each other, so it sets the
-noise floor of the entire measurement:
+Temperature controls how much 100 samples of one prompt differ from each other, so it
+sets the noise floor of the whole measurement. It was inherited as 0.7 and never
+justified. Results and the recommendation are in FINDINGS 0e.
 
-* Too low and the samples collapse toward one answer. The distribution is narrow, and
-  a brand the model would name 2% of the time never appears - the same blind spot
-  FINDINGS 6e found in counting, made worse by construction.
-* Too high and the spread widens with noise rather than signal. Brand share moves
-  between runs for reasons that have nothing to do with the brands.
+Each temperature runs as two independent halves so cross-batch drift is measured
+directly rather than inferred - that drift is the noise floor.
 
-0.7 came from convention. Nothing in the repo justified it.
-
-Design
-------
-One prompt, N samples at each of several temperatures, ungrounded (grounding adds
-retrieval variance on top, which would confound this). Each temperature is run as two
-independent batches so cross-batch stability can be measured directly rather than
-inferred: the question is not only "how many brands appear" but "does the same
-temperature give the same answer twice".
-
-Measured per temperature:
-
-1. **Coverage** - distinct brands found across all samples. Rises with temperature,
-   then stops rising once the extra spread is noise rather than new brands.
-2. **Cross-batch stability** - mean absolute difference in per-brand mention rate
-   between the two halves. This is the noise floor: the amount a brand's measured
-   share moves when nothing about the world changed.
-3. **Entropy** - Shannon entropy over the brand-set distribution, in bits. A summary
-   of how spread out the answers are.
-4. **Truncation and cost**, which should be flat but are worth confirming.
-
-Decision rule, fixed before the run
------------------------------------
-Pick the lowest temperature at which coverage has stopped growing. Past that point
-extra temperature buys variance, not visibility. If cross-batch instability is already
-climbing at that temperature, prefer the lower one: a measurement that cannot
-reproduce itself is worse than one that misses a rare brand.
+Vocabularies are closed and hand-written per category. That cannot discover an
+unexpected brand, which is the accepted cost: a capitalisation heuristic scored "Pro"
+and "Options" as brands earlier (FINDINGS 0c), and for measuring how rates move,
+precision beats recall.
 """
 
 from __future__ import annotations

@@ -1,19 +1,17 @@
 """Prometheus instrumentation.
 
-Metric choices are driven by specific questions the load tests need to answer, not by
-what is easy to emit:
+Three metrics exist to answer specific questions rather than because they were easy to
+emit:
 
-``llm_pool_saturation_ratio`` exists because the single most common way an async LLM
-client silently caps out is the HTTP connection pool. At the SDK default of 100
-connections and ~8s per request, a client cannot exceed ~12 rps no matter how much
-concurrency you hand it, and nothing in the vendor's response reveals this. Comparing
-in-flight requests against pool size makes it obvious.
+`llm_pool_saturation_ratio` - the connection pool is the most common way an async LLM
+client silently caps out, and nothing in the vendor's response reveals it (FINDINGS 3).
+Exceeds 1.0 when oversubscribed.
 
-``llm_event_loop_lag_seconds`` answers "is the ceiling us or them?". If lag climbs
-with load, the client is the bottleneck and vendor-side numbers are meaningless.
+`llm_event_loop_lag_seconds` - is the ceiling us or them? If lag climbs with load, the
+client is the bottleneck and vendor-side numbers are meaningless (FINDINGS 6g).
 
-``llm_spend_usd_total`` is computed from real ``usage_metadata``, never estimated, so
-the cost governor trips on money actually spent.
+`llm_spend_usd_total` - computed from real usage_metadata, never estimated, so the cost
+governor trips on money actually spent.
 """
 
 from __future__ import annotations

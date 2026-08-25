@@ -39,8 +39,7 @@ from google.genai import types
 
 from .logging_setup import get_logger, log_failure
 
-# The SDK logs an automatic-function-calling advisory on every generate_content call.
-# We pass no tools, so it is pure noise that would drown a load-test log.
+# Advisory fires on every call and would drown a load-test log.
 logging.getLogger("google_genai.models").setLevel(logging.ERROR)
 
 logger = get_logger("llm.gemini")
@@ -117,9 +116,8 @@ def _build_vertex_client(
         raise ValueError(
             "Vertex backend requires a project: set GOOGLE_CLOUD_PROJECT or pass project=."
         )
-    # Region is not cosmetic. It selects a distinct quota pool and distinct serving
-    # capacity, so latency and throughput measured in one region do not transfer to
-    # another (FINDINGS 4). Evertune runs in us-central1.
+    # Region selects a distinct quota pool, so capacity numbers do not transfer
+    # between regions (FINDINGS 4).
     resolved_location = location or os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
     client = genai.Client(
         vertexai=True,
@@ -172,8 +170,8 @@ class Gemini(LLM):
         http2: bool | None = None,
         grounded: bool | None = None,
     ) -> None:
-        # "vertex" | "developer". Explicit beats inferred: silently falling back to a
-        # different backend than intended would invalidate every number we collect.
+        # Silently running against the wrong backend would invalidate every
+        # measurement, so this is never inferred.
         self._backend = (backend or os.getenv("GEMINI_BACKEND") or "vertex").lower()
         if self._backend not in {"vertex", "developer"}:
             raise ValueError(f"Unknown GEMINI_BACKEND {self._backend!r}")
@@ -183,30 +181,19 @@ class Gemini(LLM):
         self._thinking_budget = (
             thinking_budget if thinking_budget is not None else _env_int("GEMINI_THINKING_BUDGET", 0)
         )
-        # Live web search. Distinct from thinking in every way that matters: it
-        # changes what the model *knows* rather than how hard it reasons, it bills on
-        # a separate per-prompt SKU rather than in tokens, and its answers are not
-        # reproducible because the web moves underneath them.
+        # Live web search: changes what the model knows, not how hard it reasons.
+        # Separate per-prompt SKU, ~123x a token-only request (FINDINGS 0c).
         self._grounded = (
             grounded if grounded is not None
             else os.getenv("GEMINI_GROUNDED", "").lower() in ("1", "true", "yes")
         )
 
-        # Pool sizing drives the achievable ceiling, so parallelism is derived from it
-        # rather than chosen independently. Headroom above in-flight count absorbs
-        # connection churn without letting the pool become the silent constraint.
+        # Derived from pool size rather than chosen independently, since the pool is
+        # the real ceiling (FINDINGS 3).
         self._max_connections = max_connections or _env_int("GEMINI_MAX_CONNECTIONS", 256)
-        # A warm-up-corrected sweep found throughput scaling linearly from 8 to 128
-        # concurrent with no knee: 0.50-0.58 rps per unit of concurrency throughout,
-        # and p50 and p99 both *improving* at the top end (FINDINGS 6g). 128 is the
-        # highest level measured, not a ceiling — the sweep ran out of budget before
-        # the service ran out of capacity.
-        #
-        # Capped at half the connection pool. At 128 concurrent against a 256
-        # connection pool the observed saturation was 50% and behaviour was clean, so
-        # half is the ratio with evidence behind it. A limit above the pool would
-        # queue on sockets rather than at the admission gate, which is exactly the
-        # invisible queueing that pool-saturation instrumentation exists to catch.
+        # 128 is the highest level measured, not a proven ceiling (FINDINGS 6g).
+        # Half the pool: a limit above it queues on sockets rather than at the
+        # admission gate, which is the queueing we cannot see.
         self._parallelism = parallelism_limit or _env_int(
             "GEMINI_PARALLELISM", max(1, min(128, self._max_connections // 2))
         )
@@ -225,23 +212,19 @@ class Gemini(LLM):
             max_connections=self._max_connections,
             max_keepalive_connections=self._max_connections,
         )
-        # HTTP/2 multiplexes many concurrent requests over a handful of TLS
-        # connections instead of one connection each. TLS is the dominant client-side
-        # cost at high concurrency: without it a local backend sustains 468 rps at
-        # 1024 concurrent, while against Vertex the same concurrency collapses to 43.7
-        # rps with 4.3s of event-loop lag (FINDINGS 6h). Fewer handshakes should move
-        # that ceiling.
+        # Fewer TLS handshakes, which is the dominant client-side cost at high
+        # concurrency. Off by default: it fixed event-loop lag but lost throughput
+        # (FINDINGS 6h).
         self._http2 = (
             http2 if http2 is not None
             else os.getenv("GEMINI_HTTP2", "").lower() in ("1", "true", "yes")
         )
         http_options = types.HttpOptions(
-            # Pin the stable surface; "v1beta1" drifts under us.
+            # v1beta1 drifts under us.
             api_version=None if self._backend == "developer" else "v1",
             base_url=base_url or os.getenv("GEMINI_BASE_URL") or None,
             async_client_args={"limits": limits, "http2": self._http2},
-            # retry_options intentionally unset: retries belong above, where they
-            # are visible to metrics.
+            # Unset on purpose: retries belong above, where metrics can see them.
         )
 
         builder = _build_vertex_client if self._backend == "vertex" else _build_developer_client
@@ -252,9 +235,7 @@ class Gemini(LLM):
         pool_size.labels(provider=_PROVIDER).set(self._max_connections)
         self._inflight = 0
 
-        # Adaptive limiting is opt-in. A fixed limit is easier to reason about when
-        # the backend's capacity really is fixed; this earns its place against shared
-        # quota, where the ceiling moves.
+        # Opt-in: only earns its place when capacity moves (FINDINGS 6b).
         if adaptive is None:
             adaptive = os.getenv("GEMINI_ADAPTIVE", "").lower() in ("1", "true", "yes")
         self._limiter: AdaptiveLimiter | None = None
@@ -262,9 +243,7 @@ class Gemini(LLM):
             config = adaptive_config or AdaptiveConfig(
                 initial_limit=float(self._parallelism),
                 min_limit=float(_env_int("GEMINI_ADAPTIVE_MIN", 1)),
-                # Never exceed the connection pool: permits beyond it would queue on
-                # sockets instead of on the gate, which is exactly the invisible
-                # queueing the limiter exists to prevent.
+                # Permits beyond the pool queue on sockets instead of the gate.
                 max_limit=float(min(self._max_connections, _env_int("GEMINI_ADAPTIVE_MAX", 512))),
             )
             self._limiter = AdaptiveLimiter(config)
@@ -357,7 +336,7 @@ class Gemini(LLM):
             if status in (401, 403):
                 return LLMAuthenticationError(message, **kwargs)
             if status in (408, 499):
-                # 499 is client-cancelled; upstream shed us, so it is worth another try.
+                # 499 is client-cancelled: upstream shed us, so retrying is right.
                 return LLMServerError(message, **kwargs)
             if status is not None and 500 <= status < 600:
                 return LLMServerError(message, **kwargs)
@@ -399,10 +378,8 @@ class Gemini(LLM):
             else FinishReason.UNKNOWN
         )
 
-        # `.text` raises on some blocked/empty payloads rather than returning None.
-        # Normalized to "" rather than None so the inherited `answer: str` contract is
-        # never violated. The provider raises before returning an empty answer, so
-        # callers only ever see a populated string.
+        # `.text` raises on some blocked payloads. Normalised to "" so the inherited
+        # `answer: str` contract holds; the provider raises before returning empty.
         try:
             answer = response.text or ""
         except Exception:
@@ -410,8 +387,7 @@ class Gemini(LLM):
         if not answer.strip():
             answer = ""
 
-        # Grounding evidence. Without the queries and sources a grounded answer is
-        # unreproducible: if a brand's share moves next week there is no way to tell
+        # Without these a grounded answer is unreproducible: no way to tell later
         # whether the model changed or the web did.
         search_queries: list[str] = []
         sources: list[str] = []
@@ -435,17 +411,14 @@ class Gemini(LLM):
         if cached:
             metadata["cached_input_tokens"] = cached
 
-        # Bill on what happened, not what was asked. Google charges the search SKU
-        # when a search runs; a request that asked for grounding and did not get it
-        # should not be charged for retrieval that never occurred.
+        # Bill on what happened, not what was asked: no search, no search fee.
         cost = cost_usd(
             self._model, input_tokens, output_tokens, cached, grounded=actually_grounded
         )
 
         if requested_grounding and not actually_grounded:
-            # Loud on purpose. This is the failure that corrupts the measurement
-            # rather than breaking the request, so it must never be inferred from
-            # absence of an error.
+            # Loud on purpose: this corrupts the measurement without breaking the
+            # request, so it must never be inferred from absence of an error.
             grounding_degraded_total.labels(provider=_PROVIDER, model=self._model).inc()
             logger.warning(
                 "grounding requested but absent from response",
@@ -534,8 +507,7 @@ class Gemini(LLM):
 
     def _log_retry(self, err: LLMError, delay: float, attempt: int) -> None:
         retry_attempts_total.labels(provider=_PROVIDER, reason=err.error_class).inc()
-        # WARNING, not ERROR: a retried request has not failed yet. Worth seeing
-        # because a rising retry rate precedes real failure.
+        # WARNING, not ERROR: a retried request has not failed yet.
         logger.warning(
             "retrying",
             reason=err.error_class,
@@ -560,8 +532,7 @@ class Gemini(LLM):
             model=self._model,
             finish_reason=parsed.finish_reason.value,
         ).inc()
-        # Tokens were billed even though nothing usable came back, so the spend is
-        # recorded before deciding whether to retry.
+        # Billed despite being unusable, so record spend before deciding to retry.
         self._record(parsed, outcome="empty")
         logger.warning(
             "unusable response",
@@ -579,8 +550,7 @@ class Gemini(LLM):
             raise LLMContentBlockedError(
                 f"blocked: {parsed.finish_reason.value}", provider=_PROVIDER
             )
-        # An empty 200 is invisible to transport-level retry; only response validation
-        # catches it, so it is raised here to re-enter backoff.
+        # Invisible to transport-level retry, so raised here to re-enter backoff.
         raise LLMEmptyResponseError(
             f"empty response (finish_reason={parsed.finish_reason.value})",
             provider=_PROVIDER,
@@ -605,18 +575,15 @@ class Gemini(LLM):
                 model=self._model, contents=question, config=config
             )
         except Exception as exc:
-            # The failed attempt's wall time is vendor time: it was spent waiting on
-            # them. Omitting it would resurface as our overhead in the caller's
-            # latency decomposition.
+            # Vendor time, not ours. Omitting it reappears as our overhead in the
+            # caller's latency decomposition.
             elapsed = time.perf_counter() - started
             outcome.upstream_s += elapsed
             translated = self._translate(exc)
             if grounded:
-                # A grounded attempt that reached the vendor may have run its search
-                # before failing, and search bills per prompt regardless of whether
-                # generation completed. We cannot tell from here, so assume the
-                # expensive case: ungrounded this is rounding error, grounded it is
-                # ~123x the token cost, up to four attempts deep.
+                # The search may have run and billed before generation failed, and
+                # we cannot tell from here. Assume the expensive case: ~123x the
+                # token cost, up to four attempts deep.
                 fee = grounding_cost_usd(1)
                 outcome.unbilled_cost_usd += fee
                 unbilled_attempt_cost_usd.labels(
@@ -701,9 +668,8 @@ class Gemini(LLM):
         result.attempts = outcome_tracker.attempts
         result.upstream_total_ms = outcome_tracker.upstream_s * 1000.0
         result.retry_backoff_ms = outcome_tracker.backoff_s * 1000.0
-        # Roll failed-attempt billing into the reported cost so the spend breaker and
-        # every downstream ledger see the true worst case rather than the cost of the
-        # one attempt that happened to succeed.
+        # Spend breakers must see the worst case, not the cost of the one attempt
+        # that happened to succeed.
         result.unbilled_attempt_cost_usd = outcome_tracker.unbilled_cost_usd
         result.cost_usd += outcome_tracker.unbilled_cost_usd
         return result

@@ -45,21 +45,17 @@ class AdaptiveConfig:
 
     # Multiplicative decrease applied on an explicit rejection.
     backoff_ratio: float = 0.7
-    # How much of a computed change to apply per sample. Low values keep the limit
-    # from chasing individual slow requests.
+    # Low values stop the limit chasing individual slow requests.
     smoothing: float = 0.2
-    # Floor on the gradient, bounding how aggressively latency alone can cut the
-    # limit in one step.
+    # Bounds how far latency alone can cut the limit in one step.
     min_gradient: float = 0.5
-    # Growth is suppressed unless in-flight is at least this fraction of the limit.
-    # Without it the limit inflates during idle periods and the first burst of real
-    # traffic is admitted against a number that was never tested.
+    # Without this the limit inflates while idle, and the first real burst is
+    # admitted against a number nothing ever tested.
     utilisation_threshold: float = 0.5
-    # The baseline decays upward slowly so a genuinely slower backend is eventually
-    # accepted as the new normal rather than treated as permanent congestion.
+    # So a genuinely slower backend eventually becomes the new normal rather than
+    # looking like permanent congestion.
     baseline_decay: float = 0.99
-    # Re-probe the baseline periodically; without this, one unusually fast early
-    # sample pins it forever and everything afterwards looks congested.
+    # Without re-probing, one fast early sample pins the baseline forever.
     baseline_reset_after_s: float = 60.0
 
 
@@ -102,8 +98,8 @@ class AdaptiveLimiter:
         if outcome is Outcome.DROP:
             s.drops += 1
             s.limit = max(c.min_limit, s.limit * c.backoff_ratio)
-            # A rejected request's latency says nothing about service speed, and its
-            # short-term average would otherwise poison the gradient.
+            # A rejection's latency says nothing about speed; it would poison the
+            # gradient.
             s.short_rtt_s = None
             self._clamp()
             return
@@ -129,8 +125,8 @@ class AdaptiveLimiter:
         # Below 1.0 means we are slower than our best observed time, i.e. queueing.
         s.gradient = max(c.min_gradient, min(1.0, baseline / max(short, 1e-9)))
 
-        # Netflix-style: allow a queue proportional to sqrt(limit), which keeps the
-        # controller from oscillating at small limits while still permitting growth.
+        # Queue allowance proportional to sqrt(limit): stops oscillation at small
+        # limits while still permitting growth.
         queue_allowance = math.sqrt(max(1.0, s.limit))
         target = s.limit * s.gradient + queue_allowance
 

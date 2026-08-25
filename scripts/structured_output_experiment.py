@@ -1,39 +1,15 @@
-#!/usr/bin/env python3
-"""Does `responseSchema` pay for itself, and does it survive grounding?
+"""Does responseSchema pay for itself, and does it survive grounding?
 
-Why
----
-FINDINGS 8 claims structured output "would likely pay for itself" and that it converts
-truncation from a silent failure into a detectable parse error. Both are arguments, not
-measurements, and both underpin a recommendation. This tests them.
+FINDINGS 8 argued structured output removes a downstream extraction call and turns
+truncation from a silent failure into a parse error. Both were arguments rather than
+measurements, and both underpin a recommendation.
 
-There is a second reason, which is the more important one. FINDINGS 0c found that
-grounded answers change *shape* - 14 of 20 came back as structured listicles - and that
-an extractor tuned on ungrounded prose misparses them quietly. Structured output is the
-obvious fix, but "obvious fix" is where this document keeps being wrong, so it needs
-checking rather than asserting. In particular, grounding and `responseSchema` are both
-implemented as request-level features on Gemini, and whether they compose at all is a
-factual question with a cheap answer.
+Four arms over the same prompts: prose and schema, each ungrounded and grounded. The
+grounded pair is the one that matters, since FINDINGS 0c found grounded answers change
+shape and break prose extractors quietly. A separate low-cap probe forces truncation in
+both arms to test the detectability claim.
 
-Four arms, same prompts:
-
-    prose   ungrounded      the current baseline
-    schema  ungrounded      does structure cost tokens or answers?
-    prose   grounded        the shape problem, as measured in 0c
-    schema  grounded        does structure survive live search?
-
-Measured
---------
-1. **Does it compose with grounding.** A hard error here would kill the recommendation
-   for the half of the workload that matters.
-2. **Token cost.** JSON has syntactic overhead; if structure costs 30% more output
-   tokens it is not free.
-3. **Extraction reliability.** Parsing JSON is deterministic. The prose arms are
-   extracted with the same closed-vocabulary matcher used elsewhere, so the comparison
-   is "what a real pipeline would get" rather than "what a perfect parser would get".
-4. **Truncation behaviour.** The claim is that a truncated JSON object is malformed and
-   therefore detectable, where truncated prose reads as a complete short list. Forced
-   directly with a deliberately low output cap.
+Results in FINDINGS 8.
 """
 
 from __future__ import annotations

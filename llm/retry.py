@@ -110,16 +110,13 @@ class RetryOutcome:
         self.attempts = 0
         self.retries_by_reason: dict[str, int] = {}
         self.budget_exhausted = False
-        # Wall time spent sleeping between attempts. Tracked separately because it is
-        # neither our processing cost nor the vendor's response time: it is a
-        # deliberate wait we chose. Folding it into either one misattributes it.
+        # Neither our cost nor the vendor's: a wait we chose. Folding it into
+        # either misattributes it.
         self.backoff_s = 0.0
-        # Upper-bound cost of attempts that failed after the vendor may already have
-        # billed. Failed attempts carry no usage metadata, so this cannot be exact;
-        # it errs high because a spend breaker that under-counts is not a breaker.
+        # Failed attempts carry no usage metadata, so this errs high on purpose: a
+        # spend breaker that under-counts is not a breaker.
         self.unbilled_cost_usd = 0.0
-        # Wall time spent inside vendor calls, summed across every attempt. The last
-        # attempt's latency alone understates a retried request.
+        # Summed across every attempt; the last one alone understates a retry.
         self.upstream_s = 0.0
 
     def note_retry(self, reason: str) -> None:

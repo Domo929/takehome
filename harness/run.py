@@ -61,9 +61,8 @@ class RequestRecord:
 
     prompt_id: str
     kind: str
-    # An instant on time.perf_counter's monotonic clock, NOT a wall-clock timestamp.
-    # Only differences between these are meaningful; the absolute value has no epoch.
-    # Every other clock in this file must match it or windowing silently misaligns.
+    # perf_counter instant, not a wall-clock timestamp. Every other clock in this
+    # file must match it or windowing silently misaligns.
     started_at: float
     latency_ms: float
     ok: bool
@@ -74,8 +73,7 @@ class RequestRecord:
     thinking_tokens: int = 0
     cost_usd: float = 0.0
     attempts: int = 1
-    # Open loop only: how long the request waited past its scheduled start. Rising
-    # schedule lag means the driver, not the service, is falling behind.
+    # Open loop only. Rising values mean the driver, not the service, is behind.
     schedule_lag_ms: float = 0.0
 
 
@@ -87,15 +85,13 @@ class StageResult:
     arrival_rate: float
     duration_s: float
     records: list[RequestRecord] = field(default_factory=list)
-    # Requests completed during warm-up. Kept for cost accounting (they were billed)
-    # but excluded from latency and throughput, because a cold connection pool
-    # measures TLS handshakes rather than the service.
+    # Billed, so counted for cost; excluded from latency and throughput because a
+    # cold pool measures TLS handshakes rather than the service.
     warmup_records: list[RequestRecord] = field(default_factory=list)
     warmup_s: float = 0.0
-    # Timestamped client-health samples. Without these the claim "the ceiling is our
-    # event loop, not the vendor" rests on a live dashboard nobody else can re-read.
-    # (perf_counter instant, value) pairs. Same clock as RequestRecord.started_at,
-    # which is what lets a sample be attributed to the window it happened in.
+    # (perf_counter instant, value) pairs, same clock as RequestRecord.started_at.
+    # Persisted so "the ceiling is our event loop" is re-checkable from the manifest
+    # rather than from a live dashboard.
     lag_samples: list[tuple[float, float]] = field(default_factory=list)
     pool_samples: list[tuple[float, float]] = field(default_factory=list)
 
@@ -157,9 +153,8 @@ class StageResult:
                 "p99_ms": round(lat[min(len(lat) - 1, int(len(lat) * 0.99))], 0) if lat else 0,
                 "errors_by_class": errs,
                 "retries": sum(max(0, r.attempts - 1) for r in rs),
-                # Peak, not mean: the question these answer is "did we ever become the
-                # bottleneck", and an average over 30 s hides exactly the spike that
-                # would say yes.
+                # Peak, not mean: an average over 30 s hides the spike that answers
+                # "did we ever become the bottleneck".
                 "event_loop_lag_ms": round(lag_peaks.get(idx, 0.0) * 1000, 1),
                 "pool_saturation": round(pool_peaks.get(idx, 0.0), 3),
             })
@@ -210,8 +205,7 @@ class StageResult:
             "retries": sum(max(0, r.attempts - 1) for r in self.records),
             "warmup_s": self.warmup_s,
             "warmup_requests": len(self.warmup_records),
-            # Cost covers warm-up too: those requests were billed even though they
-            # are excluded from the latency and throughput figures.
+            # Warm-up included: billed even though excluded from the latency figures.
             "cost_usd": round(sum(r.cost_usd for r in self.all_records), 6),
             "tokens": {
                 "input": sum(r.input_tokens for r in self.all_records),
@@ -253,15 +247,13 @@ async def _one_request(
     # closed loop, where there is no schedule to fall behind.
     scheduled_at: float = 0.0,
 ) -> RequestRecord:
-    # Blocks until the spend breaker allows another dispatch, and raises when the
-    # budget is gone. Deliberately before the clock starts: waiting on our own
-    # governor is not vendor latency.
+    # Blocks until the spend breaker allows another dispatch. Before the clock
+    # starts, because waiting on our own governor is not vendor latency.
     await governor.reserve()
 
     started = time.perf_counter()
-    # How late this request went out against its scheduled slot. Rising schedule lag
-    # in an open-loop run means the driver is falling behind, which makes it the
-    # bottleneck and every latency number an understatement.
+    # If this climbs, the driver is the bottleneck and every latency number here is
+    # an understatement.
     lag_ms = max(0.0, (started - scheduled_at) * 1000.0) if scheduled_at else 0.0
     try:
         result = await provider.ask_generic_question(
@@ -277,9 +269,8 @@ async def _one_request(
 
     latency_ms = (time.perf_counter() - started) * 1000.0
 
-    # These now live on the contract itself, but they are read defensively anyway:
-    # a provider built against the pre-grounding contract still satisfies the type,
-    # and the harness should degrade rather than crash on one.
+    # On the contract now, but read defensively: a provider built against the
+    # pre-grounding contract still satisfies the type.
     thinking_tokens = getattr(result, "thinking_tokens", 0)
     cost = getattr(result, "cost_usd", None)
     if cost is None:
@@ -351,10 +342,8 @@ async def run_closed_loop(
                     print(f"\n  budget breaker: {exc}")
                 stopped.set()
                 return
-            # Warm-up requests are billed, so they count for cost, but they are
-            # excluded from the measurement: the first seconds at a new concurrency
-            # are dominated by TLS handshakes and cold pool slots, which is precisely
-            # the artifact that made 8-second stages report throughput 2.5x low.
+            # The first seconds at a new concurrency are dominated by TLS handshakes
+            # and cold pool slots, which under-reports throughput ~2.5x (FINDINGS 6f).
             if warmup_s and (time.perf_counter() - started) < warmup_s:
                 stage.warmup_records.append(record)
             else:
@@ -367,8 +356,7 @@ async def run_closed_loop(
 
     await asyncio.gather(*(worker(i) for i in range(concurrency)))
     elapsed = time.perf_counter() - started
-    # Report the measured window only, so throughput is requests-after-warmup over
-    # seconds-after-warmup rather than a blend of the two regimes.
+    # Measured window only, so throughput is not a blend of two regimes.
     stage.duration_s = max(0.001, elapsed - warmup_s)
     return stage
 
@@ -508,8 +496,7 @@ async def main_async(args: argparse.Namespace) -> None:
         if per_stage is not None:
             total_requests = per_stage * len(stages)
         else:
-            # Duration mode: estimate from concurrency and an assumed per-request time
-            # so the cost pre-flight still means something.
+            # No request count to estimate from, so derive one from concurrency.
             assumed_s = float(os.getenv("ASSUMED_REQUEST_S", "1.5"))
             total_requests = int(
                 sum(c * args.duration / assumed_s for c in args.concurrency)
@@ -588,9 +575,8 @@ async def main_async(args: argparse.Namespace) -> None:
                     label=f"{args.label}-r{value}", temperature=args.temperature,
                 )
 
-            # Attach the client-health samples that fall inside this stage, so the
-            # manifest can answer "was the client the bottleneck" without a live
-            # dashboard.
+            # Scope samples to this stage so the manifest can answer "was the client
+            # the bottleneck" on its own.
             stage.lag_samples = [x for x in lag.samples if x[0] >= stage_t0]
             stage.pool_samples = [x for x in lag.pool_samples if x[0] >= stage_t0]
             summary = stage.summary()

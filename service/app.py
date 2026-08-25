@@ -106,14 +106,10 @@ class ServiceState:
         self.lag = EventLoopLagMonitor()
         self.inflight = 0
         self.capacity = 0
-        # Optional spend ceiling. A long-running service pointed at a metered API
-        # should be able to stop itself; without this a runaway loop bills until
-        # someone notices. Unset means no ceiling.
+        # Optional. Without it a runaway loop bills until someone notices.
         self.budget_usd = float(os.getenv("SERVICE_BUDGET_USD", "0") or 0)
         self.spent_usd = 0.0
-        # Set on SIGTERM/SIGINT. New work is refused while in-flight work finishes;
-        # for a batch worker, dropping requests mid-flight means paying for tokens
-        # whose answers are thrown away.
+        # Dropping in-flight requests means paying for answers we throw away.
         self.draining = False
 
 
@@ -141,13 +137,11 @@ async def _admission(limiter, gate):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_logging()
-    # One provider per process, so every request shares one connection pool.
-    # Constructing per request would defeat pooling and hide the pool ceiling, which
-    # is precisely the bug this exercise exists to catch.
+    # One per process: constructing per request would defeat pooling and hide the
+    # ceiling in FINDINGS 3.
     state.provider = Gemini()
     state.capacity = int(os.getenv("SERVICE_CAPACITY", state.provider.parallelism()))
-    # A fixed semaphore cannot represent a limit that moves, so when adaptive limiting
-    # is enabled the controller owns admission instead.
+    # A fixed semaphore cannot represent a moving limit, so adaptive owns admission.
     state.gate = None if state.provider.limiter else asyncio.Semaphore(state.capacity)
     if state.budget_usd > 0:
         budget_remaining_usd.set(state.budget_usd)
@@ -156,8 +150,7 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
 
     def _drain(sig: int) -> None:
-        # Flip the flag and let in-flight requests finish. uvicorn's own handler then
-        # stops the server once connections close.
+        # uvicorn's own handler stops the server once connections close.
         state.draining = True
         logger.warning(
             "draining on signal",
@@ -239,8 +232,8 @@ async def ask(payload: AskRequest) -> JSONResponse:
             status_code=503,
         )
 
-    # Shed rather than queue without bound. Checked before awaiting so a saturated
-    # service rejects immediately instead of growing an invisible backlog.
+    # Checked before awaiting, so a saturated service rejects immediately rather
+    # than growing an invisible backlog.
     admitted = limiter.try_acquire() if limiter is not None else not gate.locked()
     if not admitted:
         service_admission_rejected_total.inc()
@@ -316,11 +309,9 @@ async def ask(payload: AskRequest) -> JSONResponse:
 
     total = time.perf_counter() - started
 
-    # Vendor time across ALL attempts, not just the last one. Using only the final
-    # attempt made a retried request look as though our layer had stalled for the
-    # duration of the failed attempts plus their backoff, which produced p99
-    # "overhead" in the seconds on a path whose real cost is a fraction of a
-    # millisecond.
+    # ALL attempts, not just the last. Using only the final attempt charged failed
+    # attempts and their backoff to us: 1807ms p99 on a sub-millisecond path
+    # (FINDINGS 6).
     upstream_s = (result.upstream_total_ms or result.latency_ms or 0.0) / 1000.0
     backoff_s = (result.retry_backoff_ms or 0.0) / 1000.0
 
@@ -328,9 +319,8 @@ async def ask(payload: AskRequest) -> JSONResponse:
         state.spent_usd += result.cost_usd or 0.0
         budget_remaining_usd.set(max(0.0, state.budget_usd - state.spent_usd))
 
-    # Everything that is genuinely ours: framework, validation, JSON, event-loop
-    # scheduling, admission queueing. Vendor time and deliberate retry sleep are both
-    # excluded because neither is a cost our code can reduce.
+    # What remains after vendor time and deliberate sleep: framework, validation,
+    # JSON, scheduling. The only part we can make faster.
     overhead = max(0.0, total - upstream_s - backoff_s)
     service_request_duration_seconds.labels(outcome="success").observe(total)
     service_overhead_seconds.observe(overhead)

@@ -1,39 +1,16 @@
-#!/usr/bin/env python3
-"""Cost model for a batch brand-tracking workload.
+"""Project the yearly cost of a brand-tracking workload, and which levers move it.
 
-Why this exists
----------------
-Once the workload is known to be **batch** at **thousands of prompts per day**, the
-engineering question changes. Our measured service sustains roughly 230 rps, which
-means a 50,000-prompt day finishes in under four minutes. Throughput is not the
-constraint and will not become one at any plausible growth rate.
+Throughput is not the constraint: the service sustains ~230 rps, so a 50,000-prompt day
+finishes in minutes. Cost is, which makes the useful question "what does a year cost
+and what actually reduces it".
 
-Cost is. So the useful analysis is not "how fast can we go" but "what does a year of
-this cost, and which levers actually move it".
+Token counts are measured rather than assumed, from the live runs in results/real/ on
+Vertex us-central1. Rates are verified against Google's billing catalog - run
+scripts/verify_pricing.py.
 
-Per-request token counts are measured, not guessed — taken from the live runs in
-``results/real/``:
-
-    thinking off  ->  35.3 input, 111.1 output (0 thinking)
-    thinking on   ->  35.3 input, 458.3 output (368.6 thinking)
-
-Measured on **Vertex us-central1** (project ``evertune-tests``), the region Evertune
-runs in. Token counts vary by under 2% against the ``global`` endpoint, so the cost
-conclusions are region-portable even though latency is not. Developer API numbers
-differ more; see FINDINGS section 4.
-
-Levers modelled
----------------
-1. **Thinking budget.** Measured 6.3x cost difference; the dominant lever on the
-   output side, which is where nearly all the money is.
-2. **Batch API.** Vertex bills batch prediction at roughly half the interactive rate
-   in exchange for asynchronous, up-to-24-hour turnaround. A daily brand sweep does
-   not care about turnaround, so this is close to free money.
-3. **Context caching.** A brand-tracking workload sends one system prompt across
-   every request in the sweep. Cache hits bill input at a fraction of the normal rate,
-   and implicit caching is on by default for Gemini 2.5.
-
-Batch and cache discounts do **not** stack: the larger applies. Modelled that way.
+The headline result is that once grounding is on, none of the token levers matter:
+Batch cannot run grounded requests at all and caching needs 2,048+ input tokens against
+a workload of ~35. See FINDINGS 6c and 0c.
 """
 
 from __future__ import annotations

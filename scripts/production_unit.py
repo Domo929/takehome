@@ -1,36 +1,16 @@
-#!/usr/bin/env python3
-"""One production unit: the same prompt, 100 times, in both measurement conditions.
+"""One production unit: the same prompt, 100 times, in both conditions.
 
-Why this shape
---------------
-Every load test in this repo so far fired *different* prompts, because that is what a
-throughput harness wants. Evertune's actual unit of work is the opposite: **one prompt
-sampled 100 times**, run once with live search off and once with it on. 100 is a
-settled methodological choice, not a parameter to tune.
+Every load test here fires different prompts, because that is what a throughput harness
+wants. Evertune's actual unit of work is the opposite - one prompt sampled 100 times,
+run once with live search off and once on - and 100 is a settled methodological choice
+rather than a parameter.
 
-That difference matters more than it looks. Sampling the same prompt 100 times against
-a grounded model asks a question nobody has answered here: **do the 100 samples see the
-same web?** Ungrounded, the only variation is the model's own sampling. Grounded, each
-call can issue its own searches and retrieve its own sources, so the spread of answers
-mixes generation variance with retrieval variance. If retrieval is unstable within a
-single burst, then a brand's measured share moves for reasons that have nothing to do
-with the model, and no amount of sampling averages that out — it is not noise around a
-fixed truth, it is a moving truth.
+Sampling the same prompt 100 times against a grounded model asks whether the 100
+samples see the same web. If retrieval is unstable within a burst then a brand's share
+moves for reasons unrelated to the model, and sampling cannot average that out: it is
+not noise around a fixed truth, it is a moving truth.
 
-What this measures
-------------------
-1. **Retrieval stability.** How many distinct source sets across 100 grounded samples,
-   and how concentrated the citations are. The core question above.
-2. **Search dedup.** Whether 100 identical prompts issue 100 searches, which decides
-   whether a production unit really costs 100x the grounding SKU.
-3. **Quota.** 100 grounded prompts in a burst is a pattern we have never run. A search
-   quota separate from the generate-content quota would surface here.
-4. **Truncation at a realistic cap.** 512 truncated half of all grounded answers, so
-   this runs at 1,536 to find out where it actually settles.
-5. **Silent degradation.** Whether any sample comes back ungrounded despite asking.
-
-Cost is dominated by the grounding SKU: ~$0.025 per grounded sample, so ~$2.53 for the
-grounded arm and roughly three cents for the control.
+Results in FINDINGS 0d.
 """
 
 from __future__ import annotations

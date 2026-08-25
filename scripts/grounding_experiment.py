@@ -1,46 +1,17 @@
-#!/usr/bin/env python3
-"""What does live search actually change, and what does it actually cost?
+"""Grounded versus ungrounded on identical prompts.
 
-Why this experiment exists
---------------------------
-Evertune's GEO measurement runs each prompt twice: once with live search off, once
-with it on. The delta between those answers is the product. So grounding is not an
-optimisation knob, it is the measurement axis, and §0c of FINDINGS rests on a number
-I took from the open web rather than from an invoice.
+Evertune's measurement runs each prompt with live search off, then on; the delta is the
+product. This measures what that costs and what it changes.
 
-Published rates disagree — some sources say $14 per 1,000 grounded prompts, others
-$25. At 100 samples per prompt that is the difference between $1.40 and $2.50 for a
-single measured prompt, which is roughly 88x the ungrounded token cost either way.
-When one line item is 99% of a bill, guessing at it is not good enough.
+Paired, not independent: the same prompt is asked in both conditions, so latency, token
+and brand-set deltas are free of prompt-to-prompt variance. At this sample size the
+pairing is doing most of the statistical work.
 
-Design
-------
-Paired, not independent. The same prompt is asked in both conditions so every
-comparison is within-prompt: latency delta, token delta and brand-set delta are all
-free of prompt-to-prompt variance. With N this small that pairing is doing most of
-the statistical work.
+Deliberately excluded - a repeat arm, since production runs these days apart rather
+than hours, and load, since grounding changes the upstream rather than our concurrency
+behaviour and FINDINGS 6g already localised our ceiling to TLS.
 
-Deliberately *not* included:
-
-* **A repeat arm.** An earlier draft re-ran the grounded condition two hours later to
-  test web volatility. Dropped: production runs these conditions on a cadence of days,
-  so a two-hour delta measures nothing anyone will experience.
-* **Load.** Grounding changes the upstream, not our concurrency behaviour, and §6g
-  already localised our throughput ceiling to TLS on our side. Paying grounded rates
-  to re-measure a ceiling we have already explained would be waste.
-
-What comes out
---------------
-1. Real billed tokens per condition, to settle whether retrieved passages inflate the
-   prompt (the mock assumes ~6x; if that holds, grounding costs more than its SKU).
-2. Latency delta, which sets timeout budgets and feeds `parallelism()`.
-3. Truncation rate under grounding. 512 tokens truncated 3.3% of ungrounded answers;
-   grounded answers cite sources and may be longer.
-4. Brand-set delta — the actual product signal.
-5. A manifest that `spend_report.py` can read, so this run is not untracked spend.
-
-The invoice reconciliation happens 24h later and by hand. This script cannot see
-billing; it records what to compare against.
+Results in FINDINGS 0c.
 """
 
 from __future__ import annotations
