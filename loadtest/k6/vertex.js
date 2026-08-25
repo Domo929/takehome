@@ -46,9 +46,8 @@ export default function () {
     generationConfig: {
       temperature: Number(__ENV.TEMPERATURE || 0.7),
       maxOutputTokens: MAX_OUTPUT_TOKENS,
-      // camelCase only. Vertex accepts either spelling (proto3 JSON) but they map to
-      // the same protobuf oneof, so sending BOTH is a hard 400:
-      // "Invalid value at 'generation_config.thinking_config' (oneof)".
+      // One spelling only: camelCase and snake_case map to the same protobuf oneof,
+      // so sending both is a 400 rather than a merge. See FINDINGS 5.
       thinkingConfig: { thinkingBudget: THINKING_BUDGET },
     },
   });

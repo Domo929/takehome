@@ -1,13 +1,19 @@
 """Workload corpus.
 
 Shaped after what this system appears to exist for: asking a model which brands it
-recommends in a category, then counting the mentions. That shape matters for load
-testing because it fixes the interesting parameters — short inputs, medium outputs,
-high request counts — and those are what determine whether the bottleneck is requests
-per minute or tokens per minute.
+recommends in a category, then extracting what it said about them. Extraction is not
+mention-counting - "we would not recommend BrandA" contains the mention and means the
+opposite - so the real downstream step is closer to sentiment-attributed entity
+extraction. That does not change the load profile, but it does change what a truncated
+answer costs: a fragment cut mid-sentence can invert the sense of the clause it was
+in, which is worse than a missing sample.
 
-Inputs are kept under 250 characters, matching the scale the existing providers are
-built around. A workload of long essay prompts would measure a different system.
+Prompt length is a guess, and it is the assumption in this file most likely to be
+wrong. These sit under 250 characters because that is the scale the shipped providers
+appear built around, not because anyone confirmed it. A corpus of long analytical
+prompts would shift the workload from request-bound to token-bound and move every
+throughput number in FINDINGS. `--complex-fraction` exists so that regime can be
+measured rather than assumed; COMPLEX_TEMPLATES below is the same idea in k6.
 """
 
 from __future__ import annotations

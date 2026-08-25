@@ -1,26 +1,36 @@
-"""Load harness (the *subject* under test).
+"""In-process experiment driver for the model, with a hard spend breaker.
 
-This drives the real production code path: ``llm/gemini.py``, its connection pool,
-its retry engine, running on Python's event loop. Whatever ceiling this hits is the
-ceiling the product hits. The k6 harness in ``loadtest/k6/`` exists as an independent
-control against the same endpoint; the gap between the two is the cost of this client.
+This is not the load test. Load testing our service is k6's job (`loadtest/k6/`),
+which drives `service/app.py` over HTTP from a separate process, the way production
+traffic arrives. Two things keep this file separate rather than folded into that:
+
+**Spend control that actually stops.** Accumulated *actual* cost, read from reported
+`usage_metadata` rather than estimated, is checked before every dispatch, and the run
+drains when it trips. k6 has no way to halt itself on spend mid-run. Against someone
+else's cloud project that is not a nice-to-have.
+
+**Access to the whole response.** Thinking tokens, finish reasons, grounding sources
+and citations are read directly off the SDK object. Going through our own HTTP API
+would mean measuring our serialisation alongside the model, and anything we did not
+think to expose would simply be invisible.
+
+The brief asks what we can learn about *the model*, not only whether our code holds
+up. That is what this driver is for. Every model finding in FINDINGS came from here or
+from `scripts/`; every service finding came from k6.
 
 Closed loop vs open loop
 ------------------------
-Both are provided because they answer different questions.
+*Closed loop* holds N requests in flight and issues a new one as each finishes. It
+models a batch pipeline with N workers, which is the shape of this workload. Its
+weakness is coordinated omission: when the vendor slows down the driver issues fewer
+requests, so recorded latency understates what a real arrival stream would see.
 
-*Closed loop* holds N requests in flight and issues a new one only as an old one
-finishes. It measures what a batch pipeline with N workers achieves, which is the
-shape of the production workload here. Its weakness is coordinated omission: when the
-service slows down, the driver issues fewer requests, so recorded latency understates
-what a real arrival stream would experience.
+*Open loop* issues at a fixed arrival rate regardless of completions. It reproduces
+bursts honestly and exposes queue growth, at the cost of being able to overwhelm the
+driver itself.
 
-*Open loop* issues requests at a fixed arrival rate regardless of whether earlier ones
-completed. It reproduces bursty traffic honestly and exposes queue growth, at the cost
-of being able to overwhelm the driver itself.
-
-Reporting only closed-loop numbers is the most common way a load test flatters the
-system it is measuring, so both are recorded and compared.
+Reporting only closed-loop numbers is the most common way a load test flatters what it
+measures, so both are available and the mode is recorded in every manifest.
 """
 
 from __future__ import annotations

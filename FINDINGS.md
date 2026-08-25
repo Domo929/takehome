@@ -7,9 +7,9 @@
 > failure modes. Raw JSONL and manifests are committed under `results/real/`.
 >
 > *(measured on the Developer API)* — live requests against the **Gemini Developer
-> API**, which is a different quota pool and endpoint. Model behaviour and token
-> economics transfer; throughput and latency do not. Used only where a section
-> explicitly compares the two endpoints.
+> API** on my own personal key. Different quota pool, different endpoint: model
+> behaviour and token economics transfer, throughput and latency do not. This is where
+> the work started, before Vertex access existed (§0).
 >
 > *(validated)* — produced against the fake Vertex endpoint in `mock/`, which
 > exercises the full HTTP path, the real SDK, and the real connection pool at zero
@@ -36,17 +36,30 @@ which do not, and "the Google API" is ambiguous between them.
 | Auth | API key | ADC / service account + a GCP project |
 | Quota | **Fixed and published per tier**, enforced with 429s | **Dynamic Shared Quota** — not published, varies by region, load and time |
 | Capacity guarantees | none | optional Provisioned Throughput |
-| Measured here | yes — early findings | yes — project `evertune-tests` |
+| Measured here | yes — my own key, days 1-2 | yes — project `evertune-tests` |
 
 Both speak the same model and the same `generateContent` contract, which is why one
 provider can target either (`GEMINI_BACKEND=developer|vertex`). They are not
 interchangeable for capacity work: different quota pools, different endpoints,
 different scaling behaviour.
 
-**Both tiers have now been measured.** Early findings were taken on the Developer API
-before Vertex credentials were available; the headline experiments have since been
-repeated against Vertex (project `evertune-tests`) and the differences were material
-enough to correct published numbers — see §4.
+**Both tiers have been measured, and the order matters.** I already had a personal
+Gemini Developer API key, so I started there on day one rather than waiting for the
+`evertune-tests` project to be provisioned. That bought roughly two days of real
+measurement — the thinking-token accounting, the `MAX_TOKENS` starvation behaviour,
+the snake_case serialization bug in §5 and the empty-200 failure mode were all found
+and fixed against my own key and my own bill, before Vertex access arrived.
+
+That head start is also why §4 exists in the shape it does: by the time Vertex was
+available, the experiment was already written and had already been run once, so it was
+a re-run rather than a first attempt.
+
+The Developer API is **not** a fallback and this integration does not treat it as
+one — `GEMINI_BACKEND` exists because the two endpoints are genuinely different
+products with different quota models, and because being able to point the same
+provider at a personal key is what made an unfunded start possible. Every headline
+experiment has since been repeated against Vertex, and the differences were material
+enough to correct published numbers (§4).
 
 The distinction matters in the direction the caveat predicted. Model behaviour —
 token economics, thinking mechanics, finish reasons, payload validation — transfers
@@ -55,13 +68,14 @@ at p50 and 1.74x slower at p99** (Vertex `global` vs Developer API), and the thi
 cost ratio moved from **6.4x to 4.0x**.
 Any number in this document that describes performance names its tier.
 
-### What our own key allows
+### What the personal key allowed
 
-Probing the key used for these measurements: **200 concurrent requests, 200 successes,
-zero 429s, ~31 rps sustained.** I stopped there rather than hunting the ceiling, since
-it is a personal key with a daily cap. That is well above the free tier (single-digit
-RPM), so the measurements here were not distorted by throttling — but it also means
-this key's ceiling is unknown, and no throughput claim in this document rests on it.
+Probing it: **200 concurrent requests, 200 successes, zero 429s, ~31 rps sustained.**
+I stopped there rather than hunting the ceiling, since it is my own key with a daily
+cap and I was paying for it. Well above the free tier's single-digit RPM, so the early
+measurements were not distorted by throttling — but the ceiling is unknown, and **no
+throughput or capacity claim in this document rests on it.** Everything load-related
+was re-measured on Vertex.
 
 ---
 
@@ -752,8 +766,14 @@ answer          "iRobot (Roomba),"
 **118 tokens of reasoning bought 6 tokens of answer**, and the answer is a fragment
 ending in a comma. Nothing about that response is an error. It is a 200 with text in
 it. A provider that returns `response.text` and moves on hands that fragment
-downstream as a successful answer, and a brand-mention counter then records exactly
-one brand from a question that asked for five.
+downstream as a successful answer, and downstream extraction then records exactly one
+brand from a question that asked for five.
+
+Truncation is worse than that, though, because the downstream step is not a mention
+count. "We would not recommend BrandA" contains the mention and means the opposite, so
+extraction has to attribute sentiment. A fragment cut mid-clause can therefore invert
+the sense of what it captured rather than merely lose it — a dropped sample is a gap,
+but a truncated negative recommendation can read as a positive one.
 
 This is why `finish_reason` is carried on the response contract and why `is_usable`
 requires `STOP` rather than merely non-empty text. In the run above it correctly
@@ -1279,15 +1299,14 @@ Whether this is worth building depends on a question only Evertune can answer: *
 logprobs are a free precision upgrade. If near-miss visibility is a feature customers
 would pay for, it is a new capability rather than an optimization.
 
-## 6f. Sustained load: what an 8-second test cannot tell you *(measured)*
+## 6f. Sustained load *(measured)*
 
-This section replaces an earlier version of itself, and the reason is the finding.
-
-My first capacity tests ran for **8.5 seconds**. Vertex enforces quota **per minute**,
-so a sub-minute run cannot trigger a per-minute ceiling no matter how hard it pushes.
-Reporting "no rate limiting observed" from an 8-second burst was not a weak result, it
-was an invalid one. The harness now supports sustained runs with 30-second time-series
-windows.
+**Vertex enforces quota per minute, and a connection pool takes tens of seconds to
+warm.** Both facts set a floor on how long a capacity test has to run: anything under a
+minute cannot trigger a per-minute ceiling no matter how hard it pushes, and anything
+short enough to be dominated by TLS handshakes measures connection establishment
+rather than steady state. Runs here are minutes long, with 30-second time-series
+windows so drift is visible as a shape rather than an average.
 
 ### The sustained run
 
@@ -1305,18 +1324,19 @@ stopped by the budget breaker at $8:
 
 ![Sustained load on Vertex](docs/evidence/soak-evidence.png)
 
-### Short tests understated throughput by 2.5x
+### Duration changes the answer by 2.5x
 
-| Test | Duration | Concurrency | Throughput |
-|---|---|---|---|
-| burst | 8.3 s | 32 | 15.4 rps |
-| burst | 8.5 s | 128 | 14.2 rps |
-| **sustained** | **523 s** | **64** | **35.6 rps** |
+| Duration | Concurrency | Throughput |
+|---|---|---|
+| 8.3 s | 32 | 15.4 rps |
+| 8.5 s | 128 | 14.2 rps |
+| **523 s** | **64** | **35.6 rps** |
 
-The 8-second tests measured connection establishment, not steady state: TLS handshakes
-and cold pool slots dominate a burst that short. Every capacity number I reported
-before this run was wrong by roughly a factor of two and a half, in the conservative
-direction.
+Short runs understate sustained capacity by roughly 2.5x here, in the conservative
+direction, because TLS handshakes and cold pool slots dominate the window. Any
+capacity number quoted from a sub-minute run is measuring the wrong thing — worth
+stating because burst-shaped benchmarks are the norm and they systematically
+under-report.
 
 ### Vertex does rate limit — and hand-rolled retries are why we can see it
 
@@ -1391,7 +1411,7 @@ this run* is **+81%**. My earlier "+37% trend" is comfortably inside the normal
 oscillation of this workload. I was fitting a line to a wave and reporting the slope.
 
 **What I actually had was a sampling artifact**, and 8.7 minutes was not long enough to
-see it. That is the same lesson as the 8-second tests, one order of magnitude up: the
+see it. That is the same lesson as run duration, one order of magnitude up: the
 first mistake was measuring for less time than the quota window, and this one was
 measuring for less time than the tail's own period.
 
