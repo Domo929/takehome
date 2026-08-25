@@ -31,6 +31,16 @@
 > **Point estimates carry sample sizes, and the headline ratios carry bootstrap
 > intervals** — `python scripts/confidence.py` recomputes them from the committed raw
 > data without issuing a request.
+>
+> **On temperature.** Nearly everything here was measured at `temperature=0.7`, and
+> §0e concludes the right value is **1.0**. That is a real inconsistency and it is
+> addressed rather than ignored: §0e.7 works through every class of finding and shows
+> why none of them turn on it. The short version is that temperature reaches other
+> results only through answer length, that channel is **+5.1%**, and the workload is
+> request-bound rather than token-bound — so ratios are untouched, absolute cost moves
+> 5%, and truncation at the caps in use does not move at all. The one place it would
+> matter, grounded-vs-ungrounded brand share, is a controlled comparison whose signal
+> is 92 points against a 13-point temperature shift.
 ---
 
 ## 0. Two different Google endpoints serve this model
@@ -738,10 +748,23 @@ finding those numbers support — Dreame at 5% ungrounded versus 97% grounded �
 **92-point** effect. A 13-point temperature shift does not threaten it, and rank order
 is preserved throughout.
 
-**So: nothing needs re-running.** What it does need is the label, which is why every
-manifest now records its temperature and why §6c carries the +5% note. The one place I
-would re-measure before relying on it in production is any *absolute* brand share
-quoted from a 0.7 run, since those are the numbers a customer would read.
+**So: nothing needs re-running.** Every conclusion in this document survives the change
+unchanged, and the two figures that do move — absolute per-request cost, and absolute
+brand shares — are labelled where they appear.
+
+Re-running roughly 96,000 requests to shift a cost figure by 5% and a brand share by at
+most 13 points would have been the more impressive-looking choice and the worse one. It
+would have spent real money on Evertune's project to confirm results that the existing
+data already predicts, and the prediction is checkable: the sweep and the production
+unit share a prompt, so §0e.7's table *is* the re-run for the case that mattered, at no
+additional cost.
+
+The judgement worth recording is that **a measurement is invalidated by a parameter
+change only if the parameter reaches its mechanism.** Establishing that it does not is
+cheaper than re-measuring, and more informative, because it says *why* the result is
+robust rather than just showing it twice. For production use the absolute brand shares
+would want re-baselining at 1.0 before anyone quoted them externally — that is a
+publishing concern, not a validity one, and it is listed in §8.
 
 ### What this still does not settle
 
@@ -2065,6 +2088,14 @@ long run can be stopped on judgment rather than discovered afterwards.
 ## 8. What I would do before production
 
 Ordered by what would actually change an outcome.
+
+**0. Pin temperature and re-baseline once.** §0e sets it to 1.0 and the code now does,
+but historical brand shares were collected at 0.7. Those shift by up to 13 points, which
+is above the ~5-point noise floor, so any stored series spanning the change would show a
+step that is an artifact of configuration rather than of the market. One re-baseline run
+per tracked prompt, then freeze the value and record it alongside every result. Cheap,
+and the kind of thing that is far more expensive to discover after a customer asks why a
+brand jumped.
 
 **1. Implement the Batch API for the scheduled tier.** Per §0b this is the largest
 remaining lever — roughly **$29,600/year at 200 reports** — and it now has a clearly
