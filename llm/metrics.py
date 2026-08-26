@@ -17,6 +17,7 @@ governor trips on money actually spent.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import time
 
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, start_http_server
@@ -140,18 +141,28 @@ class EventLoopLagMonitor:
     clearest available signal that the load generator has become the bottleneck.
     """
 
-    def __init__(self, interval_s: float = 0.25) -> None:
+    # ~6 hours of history at the default interval, about 11 MB for both series.
+    # Bounded because the same monitor runs inside the long-lived service, where an
+    # unbounded list grows forever: 691k tuples a day, 20M a month, none of it ever
+    # read. The harness only ever slices back to the start of the current stage, so
+    # this is far more than it needs.
+    DEFAULT_MAX_SAMPLES = 86_400
+
+    def __init__(
+        self, interval_s: float = 0.25, max_samples: int | None = None
+    ) -> None:
         self._interval = interval_s
         self._task: asyncio.Task[None] | None = None
+        cap = self.DEFAULT_MAX_SAMPLES if max_samples is None else max_samples
         # Timestamped samples, so a run can attribute lag to the window it happened in
         # rather than reporting one number for the whole run. Gauges are point-in-time:
         # a scrape that lands between spikes misses them entirely, which is how a
         # diagnostic this important ends up unreproducible from a saved artifact.
-        self.samples: list[tuple[float, float]] = []
+        self.samples: deque[tuple[float, float]] = deque(maxlen=cap)
         # Pool saturation is sampled on the same clock so the two can be read against
         # each other: high lag with an idle pool means we are the bottleneck, high lag
         # with a full pool means we are waiting on the vendor.
-        self.pool_samples: list[tuple[float, float]] = []
+        self.pool_samples: deque[tuple[float, float]] = deque(maxlen=cap)
 
     async def _run(self) -> None:
         while True:

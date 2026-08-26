@@ -25,6 +25,12 @@ class LLMError(Exception):
         self.provider = provider
         self.status_code = status_code
         self.retry_after_s = retry_after_s
+        # Money already spent on the attempts that led here. A failed request is not
+        # a free request: an empty-but-billed 200 costs full tokens, and a grounded
+        # attempt costs $0.035 whether or not it returns anything. Without this the
+        # spend breaker is blind in exactly the failure modes where cost runs away
+        # fastest, and it disagrees with the Prometheus ledger, which does count them.
+        self.cost_usd: float = 0.0
 
     @property
     def error_class(self) -> str:
@@ -78,5 +84,18 @@ class LLMInvalidRequestError(LLMError):
 
 class LLMAuthenticationError(LLMError):
     """Credential or permission failure. Terminal, and usually fatal for the whole run."""
+
+    retryable = False
+
+
+class LLMInternalError(LLMError):
+    """An exception we did not recognise. Almost certainly a bug on our side.
+
+    Terminal on purpose. The tempting default is to treat anything unknown as a
+    transient vendor fault, but a TypeError or a response shape the SDK changed
+    underneath us does not get better on the fourth attempt. It just costs four times
+    as much and then lands in the metrics as vendor unreliability, which is where a
+    client-side defect goes to hide.
+    """
 
     retryable = False

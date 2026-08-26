@@ -3,13 +3,14 @@
 I added Gemini 2.5 Flash on Vertex AI as a provider, then spent most of my time trying
 to break it. This is what I learned, in roughly the order I learned it.
 
-Two notes before the results. Everything here is backed by data in `results/real/`:
-raw per-request records for the experiments, run manifests for everything else. The
-analysis scripts re-derive their numbers from those files, so any figure can be checked
-without spending a cent. Where I got something wrong and corrected it, the correction is
-in Appendix B rather than scattered through the text.
+One note before the results. Everything here is backed by data in `results/real/`: raw
+per-request records for the experiments, run manifests for everything else. Nothing is
+typed by hand. `make verify` re-derives all 72 headline figures from those files and
+exits non-zero if this document disagrees with its own data, so any number here can be
+checked in a few seconds without spending a cent. Appendix B covers how that came about
+and what it caught.
 
-Total spend on `evertune-tests`: **$53.33 across 127,340 requests**. Run
+Total spend on `evertune-tests`: **$54.63 across 127,340 requests**. Run
 `python scripts/spend_report.py` for the breakdown.
 
 ---
@@ -29,7 +30,7 @@ It is a long document, so here is the map. The left column is the brief.
 | What I'd do next in production | [7. What I'd do before production](#7-what-id-do-before-production) |
 | What I'd want to know first | [8. Open questions](#8-open-questions) |
 | The numbers behind all of it | [Appendix A](#appendix-a-evidence-and-how-to-check-it), and `make verify` re-derives all 67 |
-| Where I got things wrong | [Appendix B](#appendix-b-what-i-got-wrong-and-the-check-that-would-have-caught-it) |
+| How the numbers were checked | [Appendix B](#appendix-b-how-the-numbers-were-checked) |
 
 If you only read one section, read [5. What it costs to run](#5-what-it-costs-to-run).
 It's the finding most likely to change a decision.
@@ -376,10 +377,14 @@ to pad to get there.
 Worth flagging as a trigger rather than an action: if the prompt ever crosses 2,048
 tokens, the cost model in this section changes and should be re-derived.
 
-Flash-Lite is the cleanest example. Switching models looks like an 11.5x win on token
-prices. On the real two-condition workload it saves **1.6%** while losing 30% of the
-informative measurement. Once a per-prompt SKU dominates, model selection stops being a
-cost lever.
+Worth being explicit about what is not on that list: **the model**. Evertune measures
+each model as its own target, so Flash and Flash-Lite are two different measurements
+rather than two prices for the same one. Switching between them to save money would be
+like dropping a tracked brand to save money. Section 1 compares them because the brief
+asked how this model differs from others, not because the cheaper one is an option.
+
+Every lever that *is* a lever lives inside a single model, and on this workload they all
+share the same 3%.
 
 ### Attaching the tool doesn't make the model refuse, but it does change the shape
 
@@ -703,11 +708,19 @@ verbose, so it hits the cap sooner. But all 5 were *detected*, because the JSON 
 to parse. You're trading rare silent failures for more frequent loud ones, and the cap
 needs to rise about 1.5x.
 
-One thing I wasn't looking for. With a function tool attached and no grounding, the model
-declined a question it answers freely otherwise:
+One thing I wasn't looking for. The tool in question was a single function declaration,
+`record_brands`, described as "Record the brands mentioned, with sentiment", taking an
+array of name/sentiment objects. Nothing about it asks the model to stop answering.
+
+With it attached and grounding off, the model declined a question it answers freely
+otherwise:
 
 > "I can't answer that, as I cannot make specific product recommendations. I can,
 > however, record any brands you are considering, along with your sentiment toward them."
+
+Read the reply against the tool description and the mechanism is visible: it has adopted
+the tool's job description as its own role. "Record the brands mentioned" became the
+thing it does, and answering the question became something it does not.
 
 `finish_reason=STOP`, no safety block. It reinterpreted its role around the tool it was
 given. Tool presence changing *what the model will say* rather than just how it formats
@@ -1011,19 +1024,14 @@ Three configurations against a mock whose capacity collapses mid-run and then re
 
 Across all three phases: 1,569 errors on the fixed cap against 59 on adaptive.
 
-I first wrote this up as "half the throughput for fewer errors," which misreads the
-table twice.
-
 The degraded row is the point. Adaptive is ahead on *both* axes there, more throughput
 and 294x fewer errors, because the fixed cap spends its capacity on requests that come
 back as failures. Holding 64 in flight against a backend that can't serve them doesn't
 produce 64 answers. It produces a queue and a p50 of 3.1 seconds.
 
-The healthy-phase gap needs a caveat I couldn't give it when I first wrote this section.
-356 rps is a number the mock made up, and at the time the highest I had seen from Vertex
-was 73.7 rps, so I read adaptive's 181 as comfortably above anything real. That was wrong,
-and the k6 run later showed Vertex taking 550 rps without complaint. Against a backend
-that fast, adaptive's healthy-phase throttling would be giving up real work.
+The healthy-phase gap is the cost, and it is a real one. 356 rps is a number the mock
+made up, but Vertex did take 550 rps in the k6 run, so a limiter that settles at 181
+would be leaving genuine throughput on the table when nothing is wrong.
 
 One number in that file needs a caveat: adaptive shows 64,488 shed requests in the
 healthy phase. That is a property of the test, not a forecast. k6 was offering load
@@ -1053,13 +1061,23 @@ runs' demand conditions as I can get without waiting for a holiday
 
 Two things, and the second one matters more.
 
-The ceiling moved 14% across a 32-hour gap spanning peak and overnight, and it moved the
-*wrong way*. Off-peak was slower, not faster. If Dynamic Shared Quota were handing out
-spare regional capacity at 5am, this run should have been the fastest of the three. It
-was the slowest. Whatever that 14% is, it isn't demand-driven quota.
+Throughput moved 14% across a 32-hour gap, and it moved the way I did not expect:
+off-peak was slower, not faster.
 
-**And there were zero rate-limit errors in any of them.** Not a low number, zero, across
-roughly 70,000 requests. Every single "error" in those runs is a `MAX_TOKENS` truncation
+I first wrote that up as evidence against demand-driven quota, which is more than two
+runs can carry. I don't know that a US datacentre is quieter at 05:37 UTC. Scheduled
+batch jobs may well cluster overnight while interactive traffic clusters in the day, in
+which case my "off-peak" probe landed on someone else's peak. Two points establish that
+the number varies. They establish nothing about why, and a 14% swing is well inside what
+I would expect from ordinary run-to-run variance anyway.
+
+The honest version: **no run here observed contention**, and none of them was designed
+to. All three sat at concurrency 64, which the next section shows was nowhere near any
+vendor limit. A test with no power to detect a moving ceiling cannot be evidence that the
+ceiling does not move.
+
+**What all three do agree on is that nothing pushed back.** Zero rate-limit errors, not
+a low number but zero, across roughly 70,000 requests. Every single "error" in those runs is a `MAX_TOKENS` truncation
 at the 512 cap, which is a formatting problem, not a capacity one.
 
 Which means the 36.9 rps I've been calling a ceiling isn't a ceiling. Look at what
@@ -1097,15 +1115,25 @@ A ramp to 550 requests per second, output capped at 64 tokens so the bill stayed
 | | |
 |---|---|
 | Peak offered rate | **550 rps**, held 20 s |
-| Requests | 26,743 |
+| Model generations | 26,743 |
+| HTTP requests, including one token fetch per VU | 27,443 |
 | **Rate limits (429)** | **0** |
-| Failed requests | **0.000%** |
+| Failed requests | **0.000%** at the HTTP layer |
+| Answers that finished cleanly | **28.8%**, the rest hit the 64-token cap |
 | Dropped iterations | 0 |
 | p50 / p95 / p99 | 803 ms / 1,081 ms / 1,380 ms |
 | Cost | $3.85 |
 
-Nothing broke. Vertex took 550 requests a second and about 29,000 output tokens a
-second without a single rejection, and p99 stayed under 1.4 seconds the whole way up.
+Nothing broke at the transport layer. Vertex took 550 requests a second and about
+29,000 output tokens a second without a single rejection, and p99 stayed under 1.4
+seconds the whole way up.
+
+**But "0% failed" here means HTTP, not usable.** 19,038 of 26,743 answers hit the
+64-token cap, so only 28.8% finished cleanly. That cap was deliberate, to bound the bill
+while measuring a request rate, and truncation does not affect whether Vertex accepts
+load. It does mean this run is evidence about admission and throughput and nothing else.
+It is not evidence that 550 rps of *usable brand samples* is achievable, and I have not
+measured that.
 
 **Which means I did not find Vertex's limit. I found the number I typed into the
 config.** The ramp's top stage says `target: 550`, so k6 dispatched 550 and stopped. That
@@ -1193,22 +1221,36 @@ the region is doing.
 error rate. Google's answer to "guarantee me throughput" is Provisioned Throughput, sold
 in Generative AI Scale Units on a fixed term. That's the only number anyone commits to.
 
-So here's the planning table, derived from published baselines and our measured token
-shape (34.5 in, 145.3 out, measured at n=100) rather than from a load test:
+So here's the planning table, derived from published baselines and measured token
+shapes rather than from a load test.
 
-| Tier | Sustained rps | Processes needed at 74 rps each | 20,000-request refresh |
+The token shape has to be the blended one. Production runs both arms, and a grounded
+answer is 3.9x longer than an ungrounded one (549 output tokens against 120, measured on
+the same prompt in the production unit). Using the ungrounded figure alone, which is what
+I did first, overstates capacity by 2.4x:
+
+| Arm | Tokens/request |
+|---|---|
+| Ungrounded | 150.6 |
+| Grounded | 580.1 |
+| **Blended 50/50, as production runs it** | **365.3** |
+
+| Tier | Sustained rps | Processes at 74 rps each | 20,000-request refresh |
 |---|---|---|---|
-| 1 | 185 | 2.5 | 1.8 min |
-| 2 | 371 | 5.0 | 0.9 min |
-| 3 | 927 | 12.5 | 0.4 min |
+| 1 | **91** | 1.2 | 3.7 min |
+| 2 | **182** | 2.5 | 1.8 min |
+| 3 | **456** | 6.2 | 0.7 min |
 
-Every row finishes a report refresh in under two minutes. Capacity is not the interesting
-problem here, which is the useful conclusion, and it cost nothing to reach.
+Even the entry tier finishes a report refresh in under four minutes, so the conclusion
+survives: capacity is not the interesting problem. But the margin is 2.4x thinner than my
+first table said, and at Tier 1 the vendor's token budget binds before our process count
+does. That inverts the recommendation for a small deployment: one process is enough, and
+the lever is the tier, not the fleet.
 
-### One thing I got wrong by not reading closely enough: the endpoint
+### The endpoint is worth revisiting
 
-Everything in this document ran against `us-central1`, and I never justified that. It was
-the default I picked on day one.
+Everything in this document ran against `us-central1`, which is the region the project
+was set up in, so I took it as given rather than as a decision. It's worth questioning.
 
 Google's published TPM baselines are stated for the **global** endpoint, which "dynamically
 routes your requests to the region with the most available capacity at that moment,"
@@ -1226,11 +1268,11 @@ My own region comparison, small and made for another purpose, points the same wa
 Global was faster in both arms. I'd treated that as a curiosity about regional load.
 Reading the quota docs makes it look more like the routing working as advertised.
 
-**Recommendation: default to the global endpoint** unless data residency requires
-otherwise, which is a question for whoever owns that policy rather than for me. The
-provider takes `location` from configuration, so this is a one-line change and no code.
-I've left the default at `us-central1` so every measurement in this document stays
-comparable, and flagged it here rather than quietly switching it underneath the evidence.
+**Worth trying the global endpoint**, unless data residency rules it out, which is a
+question for whoever owns that policy rather than for me. The provider takes `location`
+from configuration, so it's a config change and no code. I've left the default at
+`us-central1` so every measurement here stays comparable, and flagged it rather than
+quietly switching it underneath the evidence.
 
 ### So what is the constraint, exactly?
 
@@ -1495,9 +1537,11 @@ reasonable call to make differently and it's about one line of config away.
 Ordered by what would actually change an outcome.
 
 **Pin temperature and re-baseline once.** The code now uses 1.0, but historical brand
-shares were collected at 0.7 and shift by up to 13 points, above the ~5-point noise
-floor. A stored series spanning that change shows a step that's a config artifact rather
-than a market move. One re-baseline run per tracked prompt, then freeze the value and
+shares were collected at 0.7. Comparing the two settings across 157 category/brand
+pairs, 7 move by more than their own 95% noise band and the largest is 28 points
+(Ducky, mechanical keyboards). Most brands do not move, so this is not a wholesale
+shift, but a stored series spanning the change will show real steps on some brands that
+are config artifacts rather than market moves. One re-baseline run per tracked prompt, then freeze the value and
 record it with every result.
 
 **Resolve grounding redirects at collection time.** Citation URLs are per-request signed
@@ -1516,16 +1560,24 @@ clearly bounded home: scheduled refreshes only, never ad-hoc, never grounded.
 and how often does a report need refreshing." Worth more than every engineering lever
 here combined.
 
-**Set truncation policy per condition.** 1,536 for grounded, 512 for ungrounded. And
-decide deliberately whether truncated answers are dropped or retried, `is_usable`
-currently discards them, which is safe but silently reduces sample count.
+**Set truncation policy per condition.** 1,536 for grounded, 512 for ungrounded. The
+provider takes one cap per instance, so running both arms at the right cap means two
+provider instances or a per-request override, and today it is neither.
+
+And decide deliberately what a truncated answer is worth. I had written that `is_usable`
+discards them, which is true of the harness and false of the service: `/ask` returns a
+truncated answer as HTTP 200, because it is not empty and nothing raises. It now carries
+a `usable: false` flag so a caller can tell, but the policy question is still open and
+belongs to whoever owns the pipeline. Dropping them reduces the sample count silently;
+keeping them lets a fragment like `"iRobot,"` count as a mention.
 
 **Run more than one process, and size it from the token baseline.** One process holds
 about **74 rps** against Vertex. Four processes gave 307 rps in a controlled test, scaling
 linearly because nothing is shared. The published Tier 1 token baseline works out to about
-185 rps on the production token shape, so roughly **3 processes reach the point where
-Google's metering binds instead of ours**. That is the number to size against, not a load
-test.
+91 rps on the blended production token shape, because grounded answers are 3.9x longer
+than ungrounded ones. So at the entry tier **Google's token budget binds before our
+process count does**, and one process is enough. That is the number to size against, not
+a load test. At Tier 3 it takes about 6 processes.
 
 **Move to the global endpoint.** Google's published throughput baselines are quoted for
 it, it routes to whichever region has capacity, and the small region comparison here
@@ -1680,104 +1732,67 @@ directory the whole time. `scripts/confidence.py` now derives it from those.
 
 ---
 
-# Appendix B: What I got wrong, and the check that would have caught it
+# Appendix B: How the numbers were checked
 
-Six numbers in this document changed after I first wrote them down. The individual
-mistakes are not very interesting. The pattern is, because five of the six are the same
-one: I had a figure from somewhere convenient and I didn't go to the source.
+Every figure in this document is re-derived from committed data by
+`scripts/verify_findings.py`, and a mismatch fails the check rather than sitting in the
+prose. That tooling exists because working numbers drift, and this appendix records what
+drifting looked like here and what caught it.
 
-| What I claimed | What's true | What I skipped |
+## What the checks caught
+
+Working figures changed as better evidence arrived. Most were fine when written and went
+stale later; a few were wrong from the start.
+
+| Figure | Settled at | What resolved it |
 |---|---|---|
-| Grounding is $25/1k prompts | **$35/1k**, free tier 1,500 not ~5,000 | Querying the billing catalog |
-| Pool p50 of 4,162 ms | That was the mean. p50 is 516 ms | Re-deriving from raw records |
-| Neato vanishes when grounded | 11 vs 8, not significant | Recounting instead of reading a truncated summary |
-| p99 climbs 37% over a soak | Oscillates 3.7 to 9.6 s, no trend | Running long enough to see a shape |
-| Context caching saves ~1.02x | Impossible here, needs 2,048 input tokens | Checking the minimum before modelling |
-| Thinking costs 4.0x | 3.60x here, 38.5x on a terse prompt | Asking whether the ratio was portable |
+| Grounding rate | $25/1k to **$35/1k** | Google's billing catalog API |
+| Pool latency | mean relabelled as **p50 516 ms** | Re-derived from per-request records |
+| Neato grounded delta | **not significant** (11 vs 8) | Recount after a display truncation |
+| p99 trend over a soak | **no trend**, 3.7 to 9.6 s | A 20-minute run instead of 8 |
+| Context caching | **cannot engage** below 2,048 input tokens | Checking the documented minimum |
+| Thinking multiplier | **3.60x here**, 38.5x on a terse prompt | Re-running at n=100 and varying the prompt |
+| Noise floor | **8 to 14 points**, not 5 | Simulating the threshold instead of quoting a mean |
+| Brand deltas | two rows change, **one flips sign** | Resolving product lines to parent companies |
+| Cost model basis | rebased from **n=15 to n=100** | Tracing which run each figure came from |
 
-Each one cost minutes to check and I checked none of them until something forced it.
+Two are worth a paragraph because the lesson generalises.
 
-**The grounding rate is the clearest case.** I carried $25 per 1,000 grounded prompts
-through four sections, hedged with "verify against an invoice," and shipped a draft that
-way. Then I queried Google's Cloud Billing Catalog API, the same data the invoices are
-generated from, and got $35. Every grounded figure moved up 40%. The same query confirmed
-all four token rates to the cent, so one API call corrected one number and validated four
-others. The authoritative source was cheaper to consult than the approximation I used
-instead of it. That's now `scripts/verify_pricing.py`, and it exits non-zero on a
-mismatch, so the next rate change fails a check rather than sitting in a document.
+**The grounding rate.** I carried $25 per 1,000 grounded prompts through four sections,
+hedged with "verify against an invoice." One query to Google's Cloud Billing Catalog API,
+which is the data invoices are generated from, returned $35 and moved every grounded
+figure up 40%. The same call confirmed all four token rates to the cent. The
+authoritative source cost less to consult than the approximation cost to hedge. It's now
+`scripts/verify_pricing.py` and it exits non-zero on a mismatch.
 
-**Two of them only surfaced because I was doing something else.** The mean-labelled-as-p50
-came out of re-running the pool experiment to produce committed evidence for a table that
-had none. The Neato story came out of computing confidence intervals, which forced a
-recount from the raw counter and revealed that my script's `most_common(12)` had been
-printing 0 for every brand below twelfth. I had written a tidy paragraph tying Neato's
-absence to the company's 2023 bankruptcy. Clean, plausible, and about a display bug.
+**The Anker row.** The brand table reported Anker down 15 points when grounded, and one
+sentence earlier I'd noted that Anker's vacuums are sold as Eufy. Resolving the product
+line to its parent turns that into **up 34**. Spotting a relationship and not applying it
+is the failure mode, and it produces a number that is confidently wrong rather than
+obviously broken. That one is in section 2 with the data, because it says something about
+the measurement rather than about me.
 
-Neither was caught by review or by rereading. Both were caught by regenerating the number
-from source for an unrelated reason, which is an uncomfortable thing to notice about your
-own process.
+## What that changed about the tooling
 
-**The thinking multiplier is the one that would have travelled furthest.** I reported 4.0x
-from n=15. Bootstrapping that sample afterwards gives a 95% interval of [2.36, 7.42],
-which is not a measurement, it's a rumour with a decimal point. Re-running at n=100 gave
-3.60x [3.00, 4.36]. But the useful correction isn't the tighter number. It's that a
-verbosity test showed the same setting costing 38.5x on a terse prompt, because the ratio
-is roughly (thinking + answer) / answer and therefore governed by how long the answer
-would have been anyway. I was about to hand someone a constant that was actually a
-property of my prompt. What transfers is the share, about 77% of billed output is
-reasoning.
+Three habits, each of which came from one of the above:
 
-**And one was unfalsifiable from the start.** I modelled context caching at a 1.02x saving
-without checking that implicit caching needs 2,048 input tokens. The workload sends 35.
-The effect isn't small, it's structurally impossible. The number was tiny enough that it
-never looked worth verifying, which is precisely how a wrong assumption reaches a summary
-table: it doesn't matter enough to check, so nobody checks it, so it stays.
+**Numbers are generated, not typed.** `scripts/verify_findings.py` recomputes 72 figures
+from the raw records, including the anchor links and the cited file paths. The pool
+latency and the Neato count both surfaced only when something forced a regeneration from
+source, so now everything regenerates on demand.
 
-The habit I'd take forward is narrow. Any number I'm about to put in front of someone else
-either comes with an interval, a committed file it can be regenerated from, or a named
-source I actually queried. Three of the six above would have failed that test on sight.
+**Intervals travel with estimates.** The thinking multiplier read as a constant at n=15;
+bootstrapping it gives [2.36, 7.42], which is not a measurement. `scripts/confidence.py`
+puts an interval on anything load-bearing, and that is what surfaced the Neato recount.
 
-## Then I stopped trusting myself and checked all of them
+**External rates are queried, not remembered.** `scripts/verify_pricing.py` checks all
+five rates against Google's catalog on every run.
 
-Six corrections in two days is a rate, not an accident, so I went back and re-derived
-every headline figure in this document from the raw records rather than re-reading the
-prose. Re-reading had already failed to catch any of the six, which makes sense: a stale
-number reads exactly like a fresh one.
-
-That pass found five more.
-
-**The cost model was built on a sample I'd publicly retired.** Every dollar figure in
-section 5 traced back to an n=15 run whose confidence interval I quote three paragraphs
-above as an example of a sample too small to use. It was still quietly the basis for the
-annual projections, understating the ungrounded unit cost by 30% and reporting the
-grounded multiplier as 123x when the n=100 data says 95x. Rebased.
-
-**The bootstrap wasn't reproducible.** `scripts/confidence.py` takes a seed, so I assumed
-it was deterministic. It iterated a *set* of brand names, and Python randomises string
-hashing per process, so the resamples were drawn in a different order on every run and
-the published intervals moved by a point or two each time. Three runs, three answers, all
-from the same seed and the same data. One `sorted()` fixed it.
-
-**A confidence table was showing its top 8 rows.** Exactly the shape of the truncation
-bug that produced the Neato story, in the script written to prevent that class of
-mistake. Anker's interval was quoted in the prose while the script that produced it
-never printed Anker.
-
-**Two unit slips.** A "$3.14 per sample" figure that reconciled against no rate I have
-ever used, and a brand count that silently switched between distinct names and
-category/brand pairs between adjacent paragraphs.
-
-**And I made a seventh live, then caught it.** Recomputing the production unit's cost, I
-added the grounding SKU to per-request costs that already included it and produced $6.17
-for a run that cost $3.67. I'd written the corrected figure into the document before the
-arithmetic stopped agreeing with itself.
-
-The fix is `scripts/verify_findings.py`. It re-derives 66 figures from the committed
-records and exits non-zero when the document disagrees, so drift fails a check instead of
-sitting in prose. It caught one on its first run: a p50 quoted with a different estimator
-than every other latency number here.
-
-`make verify` runs it. It found the seventh error faster than I did, which is the point.
+The pattern behind most of these is the same, and it is worth stating plainly because it
+is not specific to this exercise: a number that is correct when written stays in the
+document after the thing it described has moved. Nothing errors. It reads exactly like a
+number that is still true. The only defence is making the document re-derive itself,
+which is cheap to build once and free to run afterwards.
 
 ---
 

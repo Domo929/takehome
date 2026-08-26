@@ -199,3 +199,86 @@ def test_saturation_sheds_instead_of_queueing(client):
         released.set()
         assert r.status_code == 503
         assert r.json()["error"] == "at capacity"
+
+
+def test_failed_requests_count_against_the_budget(client):
+    """A failed request is not a free request, and the breaker has to know that.
+
+    Spend used to be recorded only on the success path, so every exception returned
+    before it. That is exactly backwards: the runaway cases are failures. An
+    empty-but-billed 200 pays full tokens and can happen four times per call, and a
+    grounded attempt pays the $0.035 SKU whether or not it returns anything. Four
+    failed grounded attempts is $0.14 with nothing to show for it.
+
+    Before the fix this test saw spent_usd stay at 0.0 through 20 failures and the
+    breaker never tripped.
+    """
+    from llm.errors import LLMEmptyResponseError
+
+    err = LLMEmptyResponseError("billed but empty", provider="gemini")
+    err.cost_usd = 0.0035  # four billed attempts' worth
+
+    with client(StubProvider(error=err), SERVICE_BUDGET_USD="0.05") as c:
+        codes = [
+            c.post("/ask", json={"system_prompt": "s", "question": "q"}).status_code
+            for _ in range(20)
+        ]
+
+    assert 422 in codes, "failures should surface as 422 before the breaker trips"
+    assert 503 in codes, "the breaker must trip on spend from failed requests"
+    assert service_app.state.spent_usd > 0.05
+
+
+def test_a_billed_but_empty_attempt_is_charged_to_the_caller(fake_vertex):
+    """The provider must report what a request cost, not what its last attempt cost.
+
+    An empty 200 is billed in full. If the caller only ever sees the successful
+    attempt's cost, a request that burned three empty attempts under-reports by
+    three attempts, and every spend control downstream inherits that error.
+    """
+    import asyncio
+
+    from llm.errors import LLMEmptyResponseError
+    from llm.gemini import Gemini
+    from llm.retry import RetryPolicy
+
+    fake_vertex.configure(empty_probability=1.0, truncate_probability=0.0)
+    provider = Gemini(
+        backend="vertex", project="p", location="global", base_url=fake_vertex.base_url,
+        thinking_budget=0, max_output_tokens=512,
+        retry_policy=RetryPolicy(max_attempts=3, attempt_timeout_s=10, total_deadline_s=30),
+    )
+
+    async def go():
+        with pytest.raises(LLMEmptyResponseError) as caught:
+            await provider.ask_generic_question("s", "q", 1.0)
+        return caught.value
+
+    err = asyncio.run(go())
+    assert err.cost_usd > 0, "three billed 200s cost money and must be reported"
+
+
+def test_a_truncated_answer_is_returned_but_flagged(client):
+    """Truncation comes back 200, and the caller has to be told.
+
+    A truncated answer is not empty, so nothing upstream raises. It arrives as a
+    plausible-looking success and a fragment like "iRobot," reads as a brand mention
+    to any extractor that counts names. FINDINGS measured truncation at 3.3% of
+    ungrounded traffic and 44% once a search tool is attached, so this is common
+    enough to move a share.
+
+    Returning it rather than rejecting it is deliberate. Whether a truncated sample
+    still counts is the caller's policy, not the provider's. But it must not be
+    indistinguishable from a clean one.
+    """
+    from llm.llm import FinishReason
+
+    truncated = _response(answer="iRobot,", finish_reason=FinishReason.MAX_TOKENS)
+    with client(StubProvider(result=truncated)) as c:
+        r = c.post("/ask", json={"system_prompt": "s", "question": "q"})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["answer"] == "iRobot,"
+    assert body["finish_reason"] == "MAX_TOKENS"
+    assert body["usable"] is False, "a truncated answer must not look clean"

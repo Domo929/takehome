@@ -488,21 +488,49 @@ async def test_unusable_response_is_logged_as_billed_waste(fake_vertex):
     assert unusable[0]["billed_but_unusable"] is True
 
 
-def test_499_is_retryable_despite_being_a_4xx():
-    """499 means upstream shed us, not that we sent something invalid.
+def test_499_is_terminal_by_default_and_retryable_only_on_request(monkeypatch):
+    """499 follows the vendor: terminal.
 
-    Bucketing it with the other 4xx codes would permanently fail a request that is
-    worth another attempt. It shows up at request rates well above what this repo
-    measured, which is exactly when a permanent failure is most expensive.
+    An earlier version of this file asserted the opposite, on the reasoning that
+    upstream had shed the connection. Google's error table says 499 is "Request is
+    cancelled by the client", their retry guidance covers only 408, 429 and 5xx, and
+    google-api-core's transient-error predicate excludes CANCELLED. I never observed
+    one, so the claim rested on reasoning rather than evidence and the reasoning was
+    against the documented contract.
+
+    The escape hatch stays because the empirical picture is not settled: there is an
+    open issue arguing 499 should be retryable, and users report transient 499s with
+    no client-side cancellation. Whoever sees them in production can flip it, and
+    they will be departing from the vendor's guidance on purpose rather than by
+    accident.
     """
     from google.genai import errors as genai_errors
 
     provider = Gemini(backend="developer", api_key="k")
-    shed = genai_errors.APIError(499, {"message": "The operation was cancelled."})
+    cancelled = genai_errors.APIError(499, {"message": "The operation was cancelled."})
 
-    translated = provider._translate(shed)
-    assert translated.retryable, "499 must be retryable"
+    monkeypatch.delenv("GEMINI_RETRY_499", raising=False)
+    translated = provider._translate(cancelled)
+    assert not translated.retryable, "499 is documented as client cancellation"
     assert translated.status_code == 499
+
+    monkeypatch.setenv("GEMINI_RETRY_499", "1")
+    assert provider._translate(cancelled).retryable
+
+
+def test_an_unrecognised_exception_is_not_blamed_on_the_vendor():
+    """Our bugs must not be retried four times and filed as vendor unreliability.
+
+    The catch-all used to return LLMServerError, so a TypeError or an SDK response
+    shape that changed underneath us would be retried with full backoff and then
+    counted in llm_requests_total{error_class="LLMServerError"} - which is evidence
+    about Google in every capacity number in FINDINGS.
+    """
+    provider = Gemini(backend="developer", api_key="k")
+    for exc in (TypeError("bad kwarg"), KeyError("candidates"), ValueError("decode")):
+        translated = provider._translate(exc)
+        assert not translated.retryable, f"{exc!r} is our bug, not a vendor fault"
+        assert type(translated).__name__ == "LLMInternalError"
 
 
 def test_client_errors_are_not_retried():

@@ -50,6 +50,7 @@ from .errors import (
     LLMContentBlockedError,
     LLMEmptyResponseError,
     LLMError,
+    LLMInternalError,
     LLMInvalidRequestError,
     LLMRateLimitError,
     LLMServerError,
@@ -86,6 +87,10 @@ _BLOCKED_REASONS = {
     FinishReason.PROHIBITED_CONTENT,
     FinishReason.SPII,
 }
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _env_int(name: str, default: int) -> int:
@@ -342,9 +347,27 @@ class Gemini(LLM):
                 return LLMRateLimitError(message, **kwargs)
             if status in (401, 403):
                 return LLMAuthenticationError(message, **kwargs)
-            if status in (408, 499):
-                # 499 is client-cancelled: upstream shed us, so retrying is right.
+            if status == 408:
                 return LLMServerError(message, **kwargs)
+            if status == 499:
+                # Terminal by default, matching Google. Their error table defines 499
+                # as "Request is cancelled by the client", their retry guidance says
+                # to retry only 408, 429 and 5xx, and google-api-core's
+                # if_transient_error does not include CANCELLED.
+                #
+                # I originally made this retryable, reasoning that upstream had shed
+                # the connection. That reasoning is not baseless (there is an open
+                # issue on the SDK arguing 499 should be retryable, and users report
+                # transient 499s with no client-side cancellation) but it contradicts
+                # the documented contract and I never observed a single 499 to
+                # support it. Retrying a cancel also risks paying twice for work the
+                # server may already have completed.
+                #
+                # So: follow the vendor, and leave an escape hatch for whoever does
+                # observe them in production.
+                if _env_flag("GEMINI_RETRY_499"):
+                    return LLMServerError(message, **kwargs)
+                return LLMInvalidRequestError(message, **kwargs)
             if status is not None and 500 <= status < 600:
                 return LLMServerError(message, **kwargs)
             if status is not None and 400 <= status < 500:
@@ -354,7 +377,11 @@ class Gemini(LLM):
         if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)):
             return LLMServerError(f"transport: {exc}", provider=_PROVIDER)
 
-        return LLMServerError(f"unexpected: {exc!r}", provider=_PROVIDER)
+        # Anything unrecognised is most likely OUR bug: a TypeError, a KeyError, an
+        # SDK response shape we did not expect. Calling it a server error retries it
+        # four times and files it under vendor unreliability in the capacity numbers,
+        # which is how a client-side defect gets misattributed to Google.
+        return LLMInternalError(f"unexpected: {exc!r}", provider=_PROVIDER)
 
     # -- response parsing ----------------------------------------------------
 
@@ -531,11 +558,18 @@ class Gemini(LLM):
             detail=str(err)[:200],
         )
 
-    def _reject_unusable(self, parsed: LLM.SimpleResponse) -> None:
+    def _reject_unusable(
+        self, parsed: LLM.SimpleResponse, outcome: RetryOutcome | None = None
+    ) -> None:
         """Raise on a billed 200 that carried no usable answer.
 
         Nothing else in the stack treats this as an error, which is exactly how a
         system ends up silently dropping a slice of its answers.
+
+        The tokens are added to ``outcome`` because they were genuinely billed. A
+        request that burns three empty 200s and then succeeds used to report only the
+        successful attempt's cost, so both the caller and the spend breaker
+        under-counted by three attempts.
         """
         empty_responses_total.labels(
             provider=_PROVIDER,
@@ -544,6 +578,8 @@ class Gemini(LLM):
         ).inc()
         # Billed despite being unusable, so record spend before deciding to retry.
         self._record(parsed, outcome="empty")
+        if outcome is not None:
+            outcome.unbilled_cost_usd += parsed.cost_usd or 0.0
         logger.warning(
             "unusable response",
             provider=_PROVIDER,
@@ -613,7 +649,7 @@ class Gemini(LLM):
         self._observe(None, latency_ms / 1000.0)
         parsed = self._parse(raw, latency_ms, outcome.attempts, grounded)
         if not parsed.answer:
-            self._reject_unusable(parsed)
+            self._reject_unusable(parsed, outcome)
         self._record(parsed, outcome="success")
         return parsed
 
@@ -668,6 +704,10 @@ class Gemini(LLM):
                 retries_by_reason=outcome_tracker.retries_by_reason or None,
                 budget_exhausted=outcome_tracker.budget_exhausted or None,
             )
+            # A failed request still costs money. Without this the caller's spend
+            # breaker never sees it, and it is precisely the runaway case: four
+            # grounded attempts is $0.14 of SKU with nothing to show.
+            err.cost_usd = outcome_tracker.unbilled_cost_usd
             raise
         finally:
             if self._retry_policy.budget is not None:

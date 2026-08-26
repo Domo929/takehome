@@ -36,7 +36,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import signal
 import time
 from contextlib import asynccontextmanager
 from typing import Any
@@ -88,6 +87,12 @@ class AskResponse(BaseModel):
     output_tokens: int
     thinking_tokens: int
     finish_reason: str
+    # Truncated answers come back 200 with a plausible-looking answer, so the caller
+    # has to be told rather than left to infer it from finish_reason. A fragment like
+    # "iRobot," counts as a brand mention to a naive extractor and silently skews a
+    # share. Returning it with a flag rather than a 422 keeps the decision with the
+    # caller: for some pipelines a truncated answer is still a usable sample.
+    usable: bool
     cost_usd: float
     upstream_ms: float
     retry_backoff_ms: float
@@ -184,27 +189,29 @@ async def lifespan(app: FastAPI):
     )
     # A fixed semaphore cannot represent a moving limit, so adaptive owns admission.
     state.gate = None if state.provider.limiter else asyncio.Semaphore(state.capacity)
+    # `state` is module-level and outlives a single lifespan. One process only ever
+    # starts once, so this is belt and braces there, but a test suite that starts the
+    # app repeatedly inherits the previous shutdown's draining flag and every later
+    # request 503s.
+    state.draining = False
     if state.budget_usd > 0:
         budget_remaining_usd.set(state.budget_usd)
     state.lag.start()
 
-    loop = asyncio.get_running_loop()
-
-    def _drain(sig: int) -> None:
-        # uvicorn's own handler stops the server once connections close.
-        state.draining = True
-        logger.warning(
-            "draining on signal",
-            signal=signal.Signals(sig).name,
-            inflight=state.inflight,
-        )
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
-            loop.add_signal_handler(sig, _drain, sig)
-        except (NotImplementedError, RuntimeError):
-            # Not available on every platform, and uvicorn may already own it.
-            pass
+    # Deliberately NOT installing a SIGTERM handler here.
+    #
+    # An earlier version called loop.add_signal_handler(SIGTERM, ...) to set the
+    # draining flag. That silently broke shutdown: asyncio's add_signal_handler calls
+    # signal.signal() underneath, which overwrites the handler uvicorn installed in
+    # capture_signals(). Lifespan startup runs after that, so we won: SIGTERM set
+    # draining=True, every request began returning 503, and uvicorn never learned it
+    # was supposed to exit. Under `docker stop` or a Kubernetes rollout the container
+    # would refuse all traffic for the full termination grace period and then die to
+    # SIGKILL. Ctrl-C was dead too.
+    #
+    # uvicorn already does the right thing: on SIGTERM it stops accepting connections
+    # and then runs lifespan shutdown, which is the code after `yield` below. So the
+    # drain belongs there, and the correct amount of signal handling is none.
 
     logger.info(
         "service ready",
@@ -214,6 +221,10 @@ async def lifespan(app: FastAPI):
     )
 
     yield
+
+    # Reached on SIGTERM/SIGINT via uvicorn, and on any other clean shutdown.
+    state.draining = True
+    logger.warning("draining", inflight=state.inflight)
 
     deadline = time.monotonic() + float(os.getenv("SERVICE_DRAIN_TIMEOUT_S", "30"))
     while state.inflight > 0 and time.monotonic() < deadline:
@@ -295,6 +306,15 @@ async def ask(payload: AskRequest) -> JSONResponse:
             headers={"Retry-After": "1"},
         )
 
+    def _charge(amount: float) -> None:
+        if state.budget_usd <= 0 or amount <= 0:
+            return
+        state.spent_usd += amount
+        state.lifetime_spent_usd += amount
+        budget_remaining_usd.set(max(0.0, state.budget_usd - state.spent_usd))
+
+    charge_usd = 0.0
+
     async with _admission(limiter, gate):
         queue_wait = time.perf_counter() - started
         service_queue_wait_seconds.observe(queue_wait)
@@ -307,7 +327,9 @@ async def ask(payload: AskRequest) -> JSONResponse:
                 payload.temperature,
                 grounded=payload.grounded,
             )
+            charge_usd = result.cost_usd or 0.0
         except (LLMEmptyResponseError, LLMContentBlockedError) as exc:
+            charge_usd = exc.cost_usd
             service_request_duration_seconds.labels(outcome="unusable").observe(
                 time.perf_counter() - started
             )
@@ -318,6 +340,7 @@ async def ask(payload: AskRequest) -> JSONResponse:
                 {"error": exc.error_class, "detail": str(exc)}, status_code=422
             )
         except LLMRateLimitError as exc:
+            charge_usd = exc.cost_usd
             service_request_duration_seconds.labels(outcome="rate_limited").observe(
                 time.perf_counter() - started
             )
@@ -330,10 +353,12 @@ async def ask(payload: AskRequest) -> JSONResponse:
                 headers={"Retry-After": str(int(exc.retry_after_s or 1))},
             )
         except LLMAuthenticationError as exc:
+            charge_usd = exc.cost_usd
             return JSONResponse(
                 {"error": exc.error_class, "detail": str(exc)}, status_code=401
             )
         except LLMError as exc:
+            charge_usd = exc.cost_usd
             service_request_duration_seconds.labels(outcome="error").observe(
                 time.perf_counter() - started
             )
@@ -354,6 +379,13 @@ async def ask(payload: AskRequest) -> JSONResponse:
         finally:
             state.inflight -= 1
             service_inflight.set(state.inflight)
+            # Charged here rather than on the success path, because failures cost
+            # money too: an empty-but-billed 200 pays full tokens, and a grounded
+            # attempt pays the SKU whether or not it returns anything. Accounting
+            # only for successes left the breaker blind in the exact failure modes
+            # where spend runs away, and disagreed with the Prometheus ledger, which
+            # counts them.
+            _charge(charge_usd)
 
     total = time.perf_counter() - started
 
@@ -363,10 +395,6 @@ async def ask(payload: AskRequest) -> JSONResponse:
     upstream_s = (result.upstream_total_ms or result.latency_ms or 0.0) / 1000.0
     backoff_s = (result.retry_backoff_ms or 0.0) / 1000.0
 
-    if state.budget_usd > 0:
-        state.spent_usd += result.cost_usd or 0.0
-        state.lifetime_spent_usd += result.cost_usd or 0.0
-        budget_remaining_usd.set(max(0.0, state.budget_usd - state.spent_usd))
 
     # What remains after vendor time and deliberate sleep: framework, validation,
     # JSON, scheduling. The only part we can make faster.
@@ -386,6 +414,7 @@ async def ask(payload: AskRequest) -> JSONResponse:
             output_tokens=result.output_tokens,
             thinking_tokens=result.thinking_tokens,
             finish_reason=result.finish_reason.value,
+            usable=result.is_usable,
             cost_usd=result.cost_usd or 0.0,
             upstream_ms=round(upstream_s * 1000, 2),
             retry_backoff_ms=round(backoff_s * 1000, 2),

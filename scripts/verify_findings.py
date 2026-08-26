@@ -224,8 +224,13 @@ def main() -> int:
     check("k6 tokens/request", round(k6_tok, 1), 87.6, tol=0.1)
     check("k6 TPM at 550 rps (millions)", round(550 * k6_tok * 60 / 1e6, 2), 2.89, tol=0.01)
     # Token baselines are Google's published Standard PayGo tiers.
-    check("Tier 1 sustained rps", round(2e6 / (34.5 + 145.3) / 60), 185)
-    check("Tier 3 sustained rps", round(10e6 / (34.5 + 145.3) / 60), 927)
+    # Blended across both arms, since production runs each prompt twice and a
+    # grounded answer is 3.9x longer. Using the ungrounded shape alone overstates
+    # capacity by 2.4x, which is what the first version of this table did.
+    blended = ((31.0 + 119.6) + (31.0 + 549.1)) / 2
+    check("blended tokens/request", round(blended, 1), 365.3, tol=0.1)
+    check("Tier 1 sustained rps", round(2e6 / blended / 60), 91)
+    check("Tier 3 sustained rps", round(10e6 / blended / 60), 456)
 
     mp = json.loads((REPO / "results/real/local/multiprocess-experiment.json").read_text())
     check("1 process at c=512", round(mp["control_one_process_c512"]["rps"], 1), 67.0)

@@ -65,9 +65,13 @@ def pricing_for(model: str | None) -> ModelPricing:
         return _FALLBACK
     if model in PRICING:
         return PRICING[model]
-    for known, price in PRICING.items():
+    # Longest prefix first. "gemini-2.5-flash" is a strict prefix of
+    # "gemini-2.5-flash-lite", so insertion order would price every dated Flash-Lite
+    # release ("...-lite-001", "...-lite-preview-06-17") at Flash rates, overstating
+    # it 5.6x. Silent, because a plausible number comes back either way.
+    for known in sorted(PRICING, key=len, reverse=True):
         if model.startswith(known):
-            return price
+            return PRICING[known]
     return _FALLBACK
 
 

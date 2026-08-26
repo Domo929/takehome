@@ -67,7 +67,7 @@ roughly half of it. More processes, not more concurrency.
 
 **Vertex meters tokens per minute, not requests per second.** So a load test hunting for
 an rps ceiling measures the wrong unit. Google publishes the baselines: 2M TPM at the
-entry tier, which is about 175 rps on this workload's token shape. That is the number to
+entry tier, which is about 185 rps on this workload's token shape. That is the number to
 plan against, and it is free to look up.
 
 **Structured output doesn't work where you need it.** `responseSchema` can't be combined

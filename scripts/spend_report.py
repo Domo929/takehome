@@ -189,10 +189,19 @@ def main() -> None:
               f"and only {grounded} were issued")
 
     evertune = by_account.get("Evertune (vertex)", {"cost": 0.0, "requests": 0})
+    # Fold the correction in rather than printing it as a footnote above a total that
+    # ignores it. The headline used to be the sum of stale manifest values, which
+    # still embed the old $25/1k rate, so it disagreed with the line directly above
+    # it and did so in the flattering direction. This file exists to prevent exactly
+    # that.
+    total = evertune["cost"] + shortfall
     print(
-        f"\n  Spent on Evertune's project: ${evertune['cost']:.4f} "
+        f"\n  Spent on Evertune's project: ${total:.4f} "
         f"across {evertune['requests']:,} requests"
     )
+    if shortfall > 0.005:
+        print(f"    (includes ${shortfall:.2f} of grounding under-charged by older "
+              f"manifests, corrected to the verified rate)")
     print("  (untracked probes are estimated; everything else is reported usage.)\n")
 
 
