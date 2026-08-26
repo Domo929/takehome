@@ -28,8 +28,11 @@ import json
 import pathlib
 import random
 import statistics
+import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
+# Run directly (`python scripts/confidence.py`) as well as via -m.
+sys.path.insert(0, str(REPO))
 RESAMPLES = 10_000
 
 
@@ -156,31 +159,34 @@ def main() -> None:
                   f"[{lo:+.0%}, {hi:+.0%}]{sig}")
         print()
 
-    # --- Thinking, from run manifests (section 4) --------------------------------
-    # Explicit paths, not a glob. A glob here silently selected the `global`-region
-    # runs over the us-central1 ones and reported a ratio from the wrong pair.
-    tb0 = REPO / "results/real/uscentral-tb0-manifest.json"
-    tb1 = REPO / "results/real/uscentral-tb-1-manifest.json"
-    if not (tb0.exists() and tb1.exists()):
-        tb0 = tb1 = None
-    if tb0 and tb1:
-        def stats(path: pathlib.Path) -> tuple[int, float, float, float]:
-            m = json.loads(path.read_text())
-            st = m["stages"][0]
-            n = st["requests"]
-            return (n, st["cost_usd"] / n, st["tokens"]["output"] / n,
-                    st["latency_ms"]["p50"])
+    # --- Thinking, from per-request records ------------------------------------
+    # An earlier version said this could not be bootstrapped because manifests store
+    # per-stage totals. The per-request ledgers were there the whole time.
+    off = latest("results/real/think-off-n100-c8.jsonl")
+    dyn = latest("results/real/think-dyn-n100-c8.jsonl")
+    if off and dyn:
+        def rows(p: pathlib.Path) -> list[dict]:
+            return [json.loads(x) for x in p.read_text().splitlines() if x]
 
-        n0, c0, o0, l0 = stats(tb0)
-        n1, c1, o1, l1 = stats(tb1)
-        print(f"Thinking, us-central1 (section 4), n={n0} and n={n1} per configuration")
-        print(f"  dynamic/off cost ratio (point)              {c1 / c0:>8.2f}x")
-        print(f"  dynamic/off output-token ratio (point)      {o1 / o0:>8.2f}x")
-        print(f"  dynamic/off p50 latency ratio (point)       {l1 / l0:>8.2f}x")
-        print("  No interval: manifests store per-stage totals, not per-request")
-        print("  values, so the sample cannot be resampled. n=15 per configuration")
-        print("  is thin for a 4x claim -- treat it as the right order of magnitude")
-        print("  rather than a precise multiplier.")
+        def cost(r: dict) -> float:
+            return (r["input_tokens"] * 0.30 + r["output_tokens"] * 2.50) / 1e6
+
+        co = [cost(r) for r in rows(off)]
+        cd = [cost(r) for r in rows(dyn)]
+        print(f"\nThinking, us-central1 (n={len(co)} and {len(cd)})")
+        show("dynamic/off cost ratio", *boot_ratio(cd, co, paired=False, rng=rng))
+        th = [r["thinking_tokens"] for r in rows(dyn)]
+        ot = [r["output_tokens"] for r in rows(dyn)]
+        print(f"  {'thinking share of output':<44}"
+              f"{statistics.fmean(th) / statistics.fmean(ot):>8.1%}")
+
+        verbosity = REPO / "results/real/thinking-verbosity.json"
+        if verbosity.exists():
+            v = json.loads(verbosity.read_text())
+            terse = v.get("terse", {})
+            if terse:
+                print(f"  {'same setting on a terse prompt':<44}"
+                      f"{terse['ratio']:>7.2f}x   <-- the multiplier is not portable")
 
 
 if __name__ == "__main__":

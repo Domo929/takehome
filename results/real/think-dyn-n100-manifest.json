@@ -1,0 +1,93 @@
+{
+  "label": "think-dyn-n100",
+  "mode": "closed",
+  "provider": {
+    "provider": "gemini",
+    "backend": "vertex",
+    "model": "gemini-2.5-flash",
+    "location": "us-central1",
+    "max_output_tokens": 2048,
+    "thinking_budget": -1,
+    "grounded": false,
+    "max_connections": 256,
+    "http2": false,
+    "parallelism": 128,
+    "max_attempts": 4,
+    "attempt_timeout_s": 60.0,
+    "total_deadline_s": 180.0
+  },
+  "corpus": {
+    "size": 200,
+    "fingerprint": "a09f8bd0739f197f",
+    "mean_input_chars": 53.6,
+    "complex_fraction": 0.0,
+    "temperature": 1.0,
+    "repeat_prompt": false
+  },
+  "estimate_usd": 0.05138,
+  "started_at": 1787715034.4477243,
+  "stages": [
+    {
+      "label": "think-dyn-n100-c8",
+      "mode": "closed",
+      "concurrency": 8,
+      "arrival_rate": 0.0,
+      "duration_s": 51.696,
+      "requests": 100,
+      "successful": 100,
+      "error_rate": 0.0,
+      "throughput_rps": 1.934,
+      "output_tokens_per_s": 1032.3,
+      "latency_ms": {
+        "p50": 3777.5,
+        "p90": 6394.3,
+        "p95": 7178.4,
+        "p99": 7827.9,
+        "max": 8435.7,
+        "mean": 3956.8
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 0,
+      "warmup_s": 0.0,
+      "warmup_requests": 0,
+      "cost_usd": 0.134446,
+      "tokens": {
+        "input": 3445,
+        "output": 53365,
+        "thinking": 41118
+      },
+      "errors_by_class": {},
+      "finish_reasons": {
+        "STOP": 100
+      },
+      "windows": [
+        {
+          "window_start_s": 0.0,
+          "requests": 63,
+          "successful": 63,
+          "rps": 2.1,
+          "p50_ms": 3948.0,
+          "p99_ms": 8436.0,
+          "errors_by_class": {},
+          "retries": 0,
+          "event_loop_lag_ms": 1.9,
+          "pool_saturation": 0.031
+        },
+        {
+          "window_start_s": 30.0,
+          "requests": 37,
+          "successful": 37,
+          "rps": 1.23,
+          "p50_ms": 3461.0,
+          "p99_ms": 7828.0,
+          "errors_by_class": {},
+          "retries": 0,
+          "event_loop_lag_ms": 2.2,
+          "pool_saturation": 0.031
+        }
+      ]
+    }
+  ],
+  "actual_usd": 0.134446,
+  "finished_at": 1787715086.1451068
+}

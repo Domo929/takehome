@@ -47,33 +47,55 @@ ceiling actually is, and whether it belongs to us or to Google.
 
 ## 1. What I learned about the model
 
-### Thinking is on by default, and it costs about 4x
+### Thinking is on by default, and what it costs depends on your prompt
 
 `thinking_budget` defaults to `-1`, which means the model reasons as much as it likes
 before answering. A request with no `thinkingConfig` at all comes back with 212 thinking
 tokens, so this isn't theoretical.
 
-Those tokens bill at the output rate and nobody ever sees them. Fifteen requests per
-config on `evertune-tests`/us-central1:
+Those tokens bill at the output rate and nobody ever sees them. 100 requests per config
+on `evertune-tests`/us-central1, 2,048-token cap so nothing was truncated:
 
 | `thinking_budget` | Cost/request | p50 | Output tokens | Of which thinking |
 |---|---|---|---|---|
-| `0` (off) | **$0.000288** | 1,471 ms | 111.1 | 0 |
-| `-1` (default) | $0.001156 | 4,106 ms | 458.3 | 368.6 |
+| `0` (off) | **$0.000374** | 1,481 ms | 145.3 | 0 |
+| `-1` (default) | $0.001344 | 3,751 ms | 533.6 | 411.2 |
 
-Turning it off is **4.0x cheaper and 2.8x faster** on this workload, and 80% of billed
-output was invisible reasoning.
+Turning it off is **3.60x cheaper** on this workload, 95% CI [3.00, 4.35], and **77% of
+billed output was invisible reasoning**.
 
-That multiplier is workload-dependent, and mine sits at the low end on purpose. My
-prompts are short brand-recommendation questions that trigger around 370 thinking tokens.
-Longer or more open-ended prompts produce longer reasoning traces and a wider ratio — I'd
-expect anywhere from 4x to 10x depending on what you ask. So treat 4.0x as a floor for
-short-prompt workloads rather than a constant of the model. What doesn't move is the
-share: roughly 80% of billed output tokens are reasoning nobody reads, and that held in
-both regions I tested.
+### But that multiplier belongs to your prompt, not to the model
 
-Worth saying plainly: this is the default. Anyone who installs the SDK, writes the
-obvious code and ships it is paying 4x for reasoning that produces no text.
+Here's the part worth knowing, and I only found it because the number looked wrong next
+to what other people report for the same setting.
+
+The ratio is roughly *(thinking + answer) / answer*. So it's governed by how long your
+answer would have been anyway. Ask something that produces two words and thinking
+dominates completely. Ask something that produces three paragraphs and thinking gets
+diluted.
+
+Measured directly. Same model, same region, same day, only the prompt changed:
+
+| Prompt | Baseline output | With thinking | Multiplier |
+|---|---|---|---|
+| "Name the single best brand. Brand name only." | **2.5 tokens** | 224.2 | **38.5x** |
+| "Which brands are worth considering?" (our workload) | 145.3 tokens | 533.6 | **3.6x** |
+
+**The same setting is worth 38x on one prompt and 3.6x on another.** That's a 10-fold
+swing from prompt shape alone, and it means quoting a single multiplier for "what
+thinking costs" is close to meaningless without saying what you asked.
+
+Our brand-recommendation prompts sit at the low end because they produce a decent
+paragraph on their own. A terser extraction prompt — "return just the brand" — would see
+something closer to 38x, and that shape is a plausible thing to build if downstream
+wanted structured output.
+
+*(I also tested a deliberately verbose prompt. Both arms hit the 2,048-token cap, so
+those numbers measure the cap rather than the model and I've thrown them out.)*
+
+What does transfer is the share: **roughly 77-80% of billed output is reasoning nobody
+reads**, and that held across every configuration I measured. That's the number to plan
+with. The multiplier is a property of your workload and you should measure your own.
 
 ### Thinking and your output cap share one budget
 
@@ -834,7 +856,8 @@ latency don't, and no capacity claim here rests on them.
 
 | Finding | Class | Data |
 |---|---|---|
-| Thinking costs 4.0x | measured | `uscentral-tb0`, `uscentral-tb-1` |
+| Thinking costs 3.6x on our prompt | measured | `think-off-n100`, `think-dyn-n100` |
+| Multiplier depends on prompt shape | measured | `thinking-verbosity.json` |
 | Thinking/output share one budget | measured | `think-cap512` |
 | snake_case serialization | validated | `test_sdk_serializes_thinking_budget_in_snake_case` |
 | Truncation 3.3% @ 512 | measured | `vertex-soak`, `vertex-soak-long` |
@@ -879,10 +902,18 @@ the rest.
 
 ## A note on confidence
 
-Headline ratios carry bootstrap intervals. Small-n results say so. The thinking ratio is
-n=15 per config and the manifests store per-stage totals rather than per-request values,
-so that one can't be bootstrapped after the fact — it's the right order of magnitude,
-not a precise multiplier.
+Headline ratios carry bootstrap intervals and small-n results say so.
+
+The thinking ratio is worth a note. I originally ran it at n=15 per config and reported
+4.0x, which looked out of line when I cross-checked against how other people measure the
+same setting. Two things came out of re-running it at n=100: the point estimate barely
+moved (3.60x, CI [3.00, 4.35]) but the interval tightened enormously — the n=15 version
+had a CI of [2.36, 7.42], which is not a measurement, it's a range containing most
+plausible answers.
+
+I'd also written that the ratio couldn't be bootstrapped because manifests store
+per-stage totals. That was wrong; the per-request ledgers were sitting in the same
+directory the whole time. `scripts/confidence.py` now derives it from those.
 
 ---
 
@@ -926,6 +957,15 @@ is 35 — 58x below the floor. The effect isn't small here, it's impossible. The
 tiny enough that it never looked worth checking, which is exactly how an unfalsifiable
 assumption reaches a headline.
 
+**A multiplier quoted as if it were a constant.** I reported thinking as "4.0x more
+expensive" from n=15, which is true for our prompt and misleading everywhere else. The
+ratio is roughly (thinking + answer) / answer, so it's governed by how verbose the
+un-thought answer would have been. On a terse prompt the same setting costs **38.5x**.
+Re-running at n=100 confirmed 3.6x for our workload and tightened the interval, but the
+useful correction is that the number was never portable — and I'd have shipped it as
+though it were. The share of billed output that is reasoning (~77%) is the part that
+actually transfers.
+
 **A mechanism generalised from one brand.** A single-category pilot found Anker swinging
 92% to 14% with temperature and I traced it to phrasing — Anker appears mostly inside
 "Eufy (Anker)", and temperature changes how often the model bothers with the aside. I
@@ -948,4 +988,4 @@ config, re-run the thinking experiment and one soak to confirm the economics car
 
 The thing I'd actually check first is whether the thinking-token behaviour holds on
 Gemini 3 Flash. That's the finding most likely to be model-specific, and it's worth
-about 4x on the bill.
+3.6x on our prompt shape and considerably more on a terser one.

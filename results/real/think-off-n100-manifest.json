@@ -1,0 +1,81 @@
+{
+  "label": "think-off-n100",
+  "mode": "closed",
+  "provider": {
+    "provider": "gemini",
+    "backend": "vertex",
+    "model": "gemini-2.5-flash",
+    "location": "us-central1",
+    "max_output_tokens": 2048,
+    "thinking_budget": 0,
+    "grounded": false,
+    "max_connections": 256,
+    "http2": false,
+    "parallelism": 128,
+    "max_attempts": 4,
+    "attempt_timeout_s": 60.0,
+    "total_deadline_s": 180.0
+  },
+  "corpus": {
+    "size": 200,
+    "fingerprint": "a09f8bd0739f197f",
+    "mean_input_chars": 53.6,
+    "complex_fraction": 0.0,
+    "temperature": 1.0,
+    "repeat_prompt": false
+  },
+  "estimate_usd": 0.05138,
+  "started_at": 1787715005.4096951,
+  "stages": [
+    {
+      "label": "think-off-n100-c8",
+      "mode": "closed",
+      "concurrency": 8,
+      "arrival_rate": 0.0,
+      "duration_s": 22.229,
+      "requests": 100,
+      "successful": 100,
+      "error_rate": 0.0,
+      "throughput_rps": 4.499,
+      "output_tokens_per_s": 653.6,
+      "latency_ms": {
+        "p50": 1527.2,
+        "p90": 3167.9,
+        "p95": 3591.3,
+        "p99": 4880.1,
+        "max": 6969.0,
+        "mean": 1703.3
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 0,
+      "warmup_s": 0.0,
+      "warmup_requests": 0,
+      "cost_usd": 0.037356,
+      "tokens": {
+        "input": 3445,
+        "output": 14529,
+        "thinking": 0
+      },
+      "errors_by_class": {},
+      "finish_reasons": {
+        "STOP": 100
+      },
+      "windows": [
+        {
+          "window_start_s": 0.0,
+          "requests": 100,
+          "successful": 100,
+          "rps": 3.33,
+          "p50_ms": 1527.0,
+          "p99_ms": 6969.0,
+          "errors_by_class": {},
+          "retries": 0,
+          "event_loop_lag_ms": 2.2,
+          "pool_saturation": 0.031
+        }
+      ]
+    }
+  ],
+  "actual_usd": 0.037356,
+  "finished_at": 1787715027.6401417
+}

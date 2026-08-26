@@ -53,9 +53,11 @@ Batch, caching, even switching to a cheaper model — work on about 1% of the sp
 never-named. It also finds ~35% fewer brands. The right value is 1.0, which is the
 model's own default.
 
-**Thinking is on by default and it's expensive.** ~4x the cost on short prompts, more on
-longer ones, and 80% of billed output is reasoning nobody reads. Worse, thinking shares
-its budget with `max_output_tokens`, so a generous budget returns HTTP 200 with no text.
+**Thinking is on by default, and what it costs depends on what you ask.** 3.6x on our
+prompts, 38x on a terse one — the multiplier is roughly (thinking + answer) / answer, so
+it swings 10-fold with prompt shape. What holds is that ~77% of billed output is
+reasoning nobody reads. And thinking shares its budget with `max_output_tokens`, so a
+generous budget returns HTTP 200 with no text at all.
 
 **The concurrency ceiling is ours, not Vertex's.** Throughput scales cleanly to 128, then
 collapses — and event loop lag goes from 5 ms to 4.3 seconds while the connection pool
