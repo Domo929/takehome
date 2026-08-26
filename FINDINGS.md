@@ -818,11 +818,11 @@ and 294x fewer errors, because the fixed cap spends its capacity on requests tha
 back as failures. Holding 64 in flight against a backend that can't serve them doesn't
 produce 64 answers. It produces a queue and a p50 of 3.1 seconds.
 
-And the healthy-phase gap is smaller than it looks, because 356 rps is a number the mock
-made up. Vertex sustained **36.9 rps** in the long soak and peaked at 73.7 rps in the
-concurrency sweep. Adaptive's 181 rps is already 2.5x above anything Google actually
-served me. The throughput it gives up on the mock is throughput that doesn't exist
-upstream, so on this workload the limiter would never be the binding constraint.
+The healthy-phase gap needs a caveat I couldn't give it when I first wrote this section.
+356 rps is a number the mock made up, and at the time the highest I had seen from Vertex
+was 73.7 rps, so I read adaptive's 181 as comfortably above anything real. That was wrong,
+and the k6 run later showed Vertex taking 550 rps without complaint. Against a backend
+that fast, adaptive's healthy-phase throttling would be giving up real work.
 
 One number in that file needs a caveat: adaptive shows 64,488 shed requests in the
 healthy phase. That is a property of the test, not a forecast. k6 was offering load
@@ -950,6 +950,87 @@ The practical consequence for Evertune: a report refresh of 20,000 requests is a
 seconds of Vertex's time. Everything I measured before this was our single Python process
 queueing in front of a vendor that was idle.
 
+### Why I stopped ramping, and what to plan with instead
+
+The obvious next step was to keep climbing until Vertex said no. I priced it at about $4
+with a small output cap. I didn't run it, and the reason is worth more than the number
+would have been.
+
+Google's on-demand tier doesn't ration by requests per second. It rations by **tokens per
+minute**, at the organisation level, and the baselines are published:
+
+| Tier | Org spend, rolling 30 days | Baseline TPM, Flash |
+|---|---|---|
+| 1 | $10 to $250 | 2,000,000 |
+| 2 | $250 to $2,000 | 4,000,000 |
+| 3 | above $2,000 | 10,000,000 |
+
+The docs are explicit that "there's no separate requests-per-minute (RPM) limit for each
+tier." So a rate in requests per second isn't the unit the system meters in, and hunting
+for one measures the wrong thing.
+
+Convert our run and it gets more interesting. At 46 input plus 64 output tokens, 550 rps
+is **3.63M TPM against a Tier 1 baseline of 2M**. We were already running at 1.8x the
+published floor, on best-effort burst, and Vertex accepted all of it without a single
+rejection. The run I already paid for is a better data point than the one I was about to
+buy.
+
+Three more reasons the ramp would have produced a number I couldn't use.
+
+**A ramp measures the ramp.** Google documents an acceleration limit separate from
+capacity: "You may encounter 429 errors because of acceleration limits if your project has
+a sharp increase in usage. To avoid hitting acceleration limits, ramp up your traffic
+gradually." A ramping load test is a sharp increase in usage by construction. It would
+find its own shape.
+
+**A 429 isn't a ceiling.** Also documented: "If you receive a 429 error, it doesn't
+indicate that you've hit a fixed quota. It indicates temporary high contention for a
+specific shared resource." So the rejection point moves with what every other customer in
+the region is doing.
+
+**And it isn't a promise.** 429s on pay-as-you-go are explicitly excluded from the SLA
+error rate. Google's answer to "guarantee me throughput" is Provisioned Throughput, sold
+in Generative AI Scale Units on a fixed term. That's the only number anyone commits to.
+
+So here's the planning table, derived from published baselines and our measured token
+shape (46 in, 145 out in production) rather than from a load test:
+
+| Tier | Sustained rps | Processes needed at 74 rps each | 20,000-request refresh |
+|---|---|---|---|
+| 1 | 175 | 2.4 | 1.9 min |
+| 2 | 349 | 4.7 | 1.0 min |
+| 3 | 873 | 11.8 | 0.4 min |
+
+Every row finishes a report refresh in under two minutes. Capacity is not the interesting
+problem here, which is the useful conclusion, and it cost nothing to reach.
+
+### One thing I got wrong by not reading closely enough: the endpoint
+
+Everything in this document ran against `us-central1`, and I never justified that. It was
+the default I picked on day one.
+
+Google's published TPM baselines are stated for the **global** endpoint, which "dynamically
+routes your requests to the region with the most available capacity at that moment,"
+giving access to a multi-region pool and "significantly increasing your potential for
+successful bursting and reducing the likelihood of 429 errors." A regional endpoint ties
+you to one region's spare capacity.
+
+My own region comparison, small and made for another purpose, points the same way:
+
+| Endpoint | p50, thinking off | p50, thinking dynamic |
+|---|---|---|
+| `global` | **1,329 ms** | **3,339 ms** |
+| `us-central1` | 1,471 ms | 4,106 ms |
+
+Global was faster in both arms. I'd treated that as a curiosity about regional load.
+Reading the quota docs makes it look more like the routing working as advertised.
+
+**Recommendation: default to the global endpoint** unless data residency requires
+otherwise, which is a question for whoever owns that policy rather than for me. The
+provider takes `location` from configuration, so this is a one-line change and no code.
+I've left the default at `us-central1` so every measurement in this document stays
+comparable, and flagged it here rather than quietly switching it underneath the evidence.
+
 ### So what is the constraint, exactly?
 
 "It's us" is not an answer anyone can act on. Four runs narrow it down, and three of them
@@ -1003,11 +1084,14 @@ The number to plan with is **roughly 74 rps per process against Vertex**. Want 5
 about 8 processes, and the earlier worker test agrees. Vertex has already shown it will
 take that and more from a single machine.
 
-That also settles the adaptive limiter. It hunts for a quota wall, keyed on latency, and
-across four runs and roughly 97,000 requests Vertex has never once rejected anything. The
-controller solves a problem I now have direct evidence doesn't exist on this workload. It
-stays off, and if throughput is ever the issue the answer is more processes, not a
-cleverer client.
+That also settles the adaptive limiter, and for a better reason than "we never saw a
+429." Google's own guidance for this tier is exponential backoff, traffic smoothing, and
+the global endpoint. A gradient controller that infers a capacity ceiling from latency is
+solving a problem the vendor says isn't shaped that way: contention is transient, the
+limit is measured in tokens per minute, and a sharp ramp trips an acceleration limiter
+that has nothing to do with capacity. Retry with backoff and admission control are already
+in the provider. The limiter stays off, and if throughput is ever the issue the answer is
+more processes, not a cleverer client.
 
 ---
 
@@ -1039,8 +1123,17 @@ On those assumptions, one report refreshed once is:
 ```
 
 **Ad-hoc is a burst problem.** Those 20,000 requests arrive at once when someone clicks
-create. At the measured 36.9 rps that is a few minutes of wall clock, and it is the
-scenario the admission control and retry budget exist for.
+create. How long that takes is a deployment choice rather than a vendor limit:
+
+| | Wall clock for one report |
+|---|---|
+| 1 process, as measured in the soak | 9.0 min |
+| 4 processes | 1.1 min |
+| Capped by a Tier 1 token baseline | 1.9 min |
+
+Even the slowest row is minutes, and the token baseline binds before anything in our
+control does. This is the scenario the admission control and retry budget exist for, but
+it isn't a capacity problem.
 
 It is also **$356**, of which $350 is grounding.
 
@@ -1206,8 +1299,10 @@ the ability is permanently lost to answer "which publishers drive this brand's
 visibility." Biggest
 engineering gap here.
 
-**Implement Batch for the scheduled ungrounded arm.** ~$29,600/year at 200 reports, with
-a clearly bounded home: scheduled refreshes only, never ad-hoc, never grounded.
+**Implement Batch for the scheduled ungrounded arm.** Worth $3,456 a year at monthly
+cadence and $14,976 at weekly, against a grounded bill of $847,000. Nearly free to
+implement and worth taking, but it is housekeeping rather than a strategy, and it has a
+clearly bounded home: scheduled refreshes only, never ad-hoc, never grounded.
 
 **Decide the grounding cadence.** At $356 per report the interesting question stops being
 "how fast can we serve this" and becomes "does every prompt need the grounded condition,
@@ -1218,8 +1313,17 @@ here combined.
 decide deliberately whether truncated answers are dropped or retried, `is_usable`
 currently discards them, which is safe but silently reduces sample count.
 
-**Run more than one process.** `parallelism()` is per process and one event loop tops out
-well below what the pool allows.
+**Run more than one process, and size it from the token baseline.** One process holds
+about **74 rps** against Vertex. Four processes gave 307 rps in a controlled test, scaling
+linearly because nothing is shared. The published Tier 1 token baseline works out to about
+175 rps on the production token shape, so roughly **3 processes reach the point where
+Google's metering binds instead of ours**. That is the number to size against, not a load
+test.
+
+**Move to the global endpoint.** Google's published throughput baselines are quoted for
+it, it routes to whichever region has capacity, and the small region comparison here
+already favoured it on latency. One configuration change, no code. Worth confirming
+against whatever data residency policy applies.
 
 ---
 
@@ -1229,6 +1333,11 @@ well below what the pool allows.
 Grounded answers carry retrieval variance on top of generation variance, so they're
 noisier, not quieter. But nobody has told me the sampling policy has to match across
 conditions, and at 123x per request that's the largest lever left.
+
+**Does the global endpoint change the numbers?** Everything here ran on `us-central1`.
+Google routes the global endpoint to whichever region has capacity, and the published
+throughput baselines are quoted for it. Re-running the soak against `global` would say
+whether that shows up as throughput or only as fewer rejections under contention.
 
 **Does retrieval variance move brand share?** Grounded answers vary and retrieval varies.
 Separating "the model changed its mind" from "different pages came back" needs the same

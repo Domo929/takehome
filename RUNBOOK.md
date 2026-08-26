@@ -97,9 +97,15 @@ SCENARIO=constant RATE=50 DURATION=30s k6 run loadtest/k6/service.js
 # the vendor, or the mock standing in for it
 TARGET=mock SCENARIO=smoke k6 run loadtest/k6/vertex.js
 TARGET=vertex SCENARIO=ramp GOOGLE_CLOUD_PROJECT=... k6 run loadtest/k6/vertex.js
+
+# Push hard enough to look for a vendor limit. Ramps to 550 rps, ~$3.85 at a
+# 64-token cap. Aborts on sustained 429s, because once Vertex starts refusing
+# there is nothing further to learn by paying for more refusals.
+TARGET=vertex SCENARIO=ceiling GEMINI_MAX_OUTPUT_TOKENS=64 \
+  GOOGLE_CLOUD_PROJECT=... k6 run loadtest/k6/vertex.js
 ```
 
-Scenarios: `smoke`, `constant`, `ramp`, `spike`, `calibrate`. Knobs: `RATE`,
+Scenarios: `smoke`, `constant`, `ramp`, `spike`, `ceiling`, `calibrate`. Knobs: `RATE`,
 `DURATION`, `MAX_VUS`, `COMPLEX_FRACTION` (share of long-form prompts), `TEMPERATURE`,
 `GROUNDED`.
 

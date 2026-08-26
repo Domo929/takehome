@@ -59,9 +59,16 @@ it swings 10-fold with prompt shape. What holds is that ~77% of billed output is
 reasoning nobody reads. And thinking shares its budget with `max_output_tokens`, so a
 generous budget returns HTTP 200 with no text at all.
 
-**The concurrency ceiling is ours, not Vertex's.** Throughput scales cleanly to 128, then
-collapses. And event loop lag goes from 5 ms to 4.3 seconds while the connection pool
-sits at 50%. Past that point you need more processes, not more concurrency.
+**The concurrency ceiling is ours, not Vertex's, and I can show by how much.** One Python
+process holds about 74 rps. k6 pointed at the same endpoint on the same day sustained
+**550 rps with zero rejections**. Four processes carrying the same total concurrency beat
+one process 307 rps to 67. The limit is one event loop, and TLS crypto on that loop costs
+roughly half of it. More processes, not more concurrency.
+
+**Vertex meters tokens per minute, not requests per second.** So a load test hunting for
+an rps ceiling measures the wrong unit. Google publishes the baselines: 2M TPM at the
+entry tier, which is about 175 rps on this workload's token shape. That is the number to
+plan against, and it is free to look up.
 
 **Structured output doesn't work where you need it.** `responseSchema` can't be combined
 with the search tool, and neither can function calling. So the one condition where
