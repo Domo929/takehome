@@ -303,7 +303,7 @@ async def run_closed_loop(
 ) -> StageResult:
     """Hold ``concurrency`` requests in flight.
 
-    Either run a fixed number of requests, or — for saturation testing — sustain the
+    Either run a fixed number of requests, or, for saturation testing, sustain the
     level for ``duration_s``. Duration is the mode that matters for quota: Vertex
     enforces limits per minute, so a run shorter than a minute cannot trigger a
     per-minute ceiling no matter how hard it pushes. A short burst that reports no

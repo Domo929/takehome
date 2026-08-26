@@ -59,7 +59,7 @@ async def test_explicit_capacity_override_wins(_dev_env, monkeypatch):
 
 
 async def test_adaptive_limiter_is_off_by_default(_dev_env):
-    """Its justification — that quota moves — is not evidenced (FINDINGS 1).
+    """Its justification, that quota moves, is not evidenced (FINDINGS 1).
 
     Shipping it enabled would mean running unproven machinery in the request path.
     """

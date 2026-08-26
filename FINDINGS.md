@@ -9,7 +9,7 @@ analysis scripts re-derive their numbers from those files, so any figure can be 
 without spending a cent. Where I got something wrong and corrected it, the correction is
 in Appendix B rather than scattered through the text.
 
-Total spend on `evertune-tests`: **$46.15 across 96,414 requests**. Run
+Total spend on `evertune-tests`: **$46.32 across 96,614 requests**. Run
 `python scripts/spend_report.py` for the breakdown.
 
 ---
@@ -248,12 +248,43 @@ analysis.
 |---|---|---|
 | Thinking off | both conditions | ~100% of *token* cost |
 | Batch API (2x) | ungrounded only, batch has no tool support | **~1%** |
-| Context caching | neither, needs 2,048+ input tokens, workload is 35 | **0%** |
+| Context caching | neither, floor is 2,048 input tokens, workload is 35 | **0%** |
 | **Grounding SKU** | grounded only | **~99%** |
 
 Every token optimisation in this document works on roughly 1% of the bill. Batch
 prediction can't run grounded requests at all, and implicit caching can't engage on a
 35-token prompt. It needs 2,048 minimum, so the workload is 58x below the floor.
+
+#### Could we pad the prompt to reach the cache floor?
+
+Fair question, and 2,048 tokens isn't a lot. But the arithmetic says no, and it says so
+without spending anything.
+
+| Prompt | Cache hit rate | Cost/request | vs today |
+|---|---|---|---|
+| 35 tokens (today) | can't engage | $0.000373 | baseline |
+| padded to 2,048 | 0% | $0.000977 | 2.62x |
+| padded to 2,048 | 50% | $0.000700 | 1.88x |
+| padded to 2,048 | 90% | $0.000479 | 1.28x |
+| padded to 2,048 | **100%** | $0.000424 | **1.14x** |
+
+Even a perfect cache hit rate loses. The cached rate is $0.03 per million against $0.30
+uncached, a 10x discount, but padding multiplies the token count by 58. Ten times cheaper
+on fifty-eight times as many tokens is 5.9x more money. You'd have to pay for the padding
+forever to unlock a discount worth less than the padding.
+
+Break-even sits at 350 input tokens. The floor sits at 2,048. So there's a dead band
+between them where caching would pay for itself and Google won't let you use it.
+
+**But this flips if the prompt grows on its own.** Evertune samples the same prompt 100
+times, which is close to the ideal caching workload: one prefix, many hits, all within
+the TTL. If a future prompt carries a long system message, few-shot examples or a brand
+list and lands past 2,048 tokens naturally, implicit caching is already on and would take
+**51% off the request at 2,048 tokens and 65% at 5,000**. Nothing to build, and no reason
+to pad to get there.
+
+Worth flagging as a trigger rather than an action: if the prompt ever crosses 2,048
+tokens, the cost model in this section changes and should be re-derived.
 
 Flash-Lite is the cleanest example. Switching models looks like an 11.5x win on token
 prices. On the real two-condition workload it saves **1.6%** while losing 30% of the
@@ -372,6 +403,34 @@ that are not comparable.
 independent 30-sample halves at the same setting. Any brand movement smaller than that
 isn't a finding. Reporting a 3-point move as a trend is the easiest mistake this product
 can make.
+
+### Is 100 samples the right number?
+
+I took n=100 as given, then went looking for whether it holds up. Evertune has published
+the rationale: margin of error is "a massive 27 points" at 5 repetitions, 12 points at
+12, and "about 6 points" at 100, with diminishing returns past that.
+
+That reproduces. For a proportion at n=100 the 95% margin of error is:
+
+| True mention rate | 95% margin of error |
+|---|---|
+| 5% | +/- 4.3 points |
+| 10% | +/- 5.9 points |
+| 30% | +/- 9.0 points |
+| 50% | **+/- 9.8 points** |
+
+So "about 6 points" is right for a brand sitting near 10%, which is where most brands in
+a crowded category sit. The number to keep in mind is that it roughly doubles in the
+middle of the range. A brand at 50% carries +/- 10 points at n=100, and two brands 8
+points apart there are not distinguishable. That isn't an argument for more samples,
+n=400 would only halve it, and the cost scales linearly while the error scales with the
+square root. It's an argument for reporting the interval next to the number.
+
+Which is the thread back to temperature. At temperature 0 the margin of error collapses
+toward zero, because every brand lands at 0% or 100% and repeated sampling returns the
+same answer every time. A measurement can have a tiny margin of error and still be
+useless. Precision is not accuracy, and n=100 only buys something when the underlying
+process actually varies.
 
 ### Logprobs are free and see what counting can't
 
@@ -689,7 +748,7 @@ handshakes save.
 Negative result, shipped off by default behind `GEMINI_HTTP2`. It stays in the repo
 because it's the evidence for the TLS diagnosis, not because I recommend it.
 
-### Adaptive concurrency: real, but not proven here
+### Adaptive concurrency: it works, but the premise is unproven
 
 `parallelism()` returning a constant assumes capacity is something discovered once.
 Vertex uses Dynamic Shared Quota, which publishes no per-project ceiling and moves with
@@ -699,17 +758,45 @@ I built a gradient limiter that keys on **latency** rather than error codes, bec
 Vertex often doesn't reject excess load. It just slows down. A controller watching only
 429s sees a healthy service and keeps climbing.
 
-Against a backend whose capacity collapses mid-run, adaptive produced about **30x fewer
-errors** than a fixed cap tuned for the good case. But in the healthy phase it managed
-176 rps against fixed-high's 360, so the trade is roughly half the peak throughput for a
-large drop in errors.
+Three configurations against a mock whose capacity collapses mid-run and then recovers
+(`results/real/local/adaptive-experiment.txt`):
 
-**It ships off by default.** The capacity change in that experiment was simulated by
-reconfiguring the mock. It's a fair test of the controller's dynamics, but it isn't
-evidence that Vertex's quota actually moves on that timescale. And my two soaks twelve
-minutes apart saw the same ceiling, which is weak evidence *against* volatility. Shipping
-less machinery is right when the justification is unproven. The code's there if a
-multi-hour run later shows capacity moving.
+| Phase | Config | rps | p50 | p99 | Errors |
+|---|---|---|---|---|---|
+| Healthy | fixed-high (64) | 356.2 | 239 ms | 818 ms | 50 |
+| Healthy | adaptive | 181.2 | **163 ms** | **548 ms** | 23 |
+| Degraded | fixed-high (64) | 15.7 | 3,139 ms | 6,291 ms | **1,468** |
+| Degraded | adaptive | **19.2** | **169 ms** | 4,207 ms | **5** |
+| Recovered | fixed-high (64) | 357.6 | 241 ms | 1,453 ms | 51 |
+| Recovered | adaptive | 215.6 | **161 ms** | **693 ms** | 31 |
+
+Across all three phases: 1,569 errors on the fixed cap against 59 on adaptive.
+
+I first wrote this up as "half the throughput for fewer errors," which misreads the
+table twice.
+
+The degraded row is the point. Adaptive is ahead on *both* axes there, more throughput
+and 294x fewer errors, because the fixed cap spends its capacity on requests that come
+back as failures. Holding 64 in flight against a backend that can't serve them doesn't
+produce 64 answers. It produces a queue and a p50 of 3.1 seconds.
+
+And the healthy-phase gap is smaller than it looks, because 356 rps is a number the mock
+made up. Vertex sustained **36.9 rps** in the long soak and peaked at 73.7 rps in the
+concurrency sweep. Adaptive's 181 rps is already 2.5x above anything Google actually
+served me. The throughput it gives up on the mock is throughput that doesn't exist
+upstream, so on this workload the limiter would never be the binding constraint.
+
+One number in that file needs a caveat: adaptive shows 64,488 shed requests in the
+healthy phase. That is a property of the test, not a forecast. k6 was offering load
+open-loop with no ceiling, so everything above the limit gets rejected. In production the
+only client is our own harness and we control its arrival rate.
+
+**It still ships off by default**, and the reason is the row that isn't in the table. The
+capacity collapse was simulated by reconfiguring the mock. That's a fair test of the
+controller's dynamics and a poor test of the premise, because it assumes the thing it was
+built for. My two soaks twelve minutes apart saw the same ceiling, which is weak evidence
+*against* quota moving at all. A controller justified by an unmeasured claim about someone
+else's infrastructure should be off until the claim is measured.
 
 ---
 
@@ -771,6 +858,41 @@ $847,000. Worth taking, since it is nearly free to implement, but it is not a st
 
 *(By "arm" I mean one of the two conditions. The ungrounded arm is every request made
 with live search off, the grounded arm is the same prompts with it on.)*
+
+#### A sanity check on my own assumptions
+
+Those numbers rest on prompt counts I made up, so I looked for something public to check
+them against. Evertune's published material says the platform runs "millions of prompts a
+day" across "11+ AI models."
+
+Taking that at face value and splitting evenly across models, with half of each model's
+traffic in the search-augmented arm:
+
+| Total volume | Per model/day | Grounded arm, Gemini alone | Ungrounded arm |
+|---|---|---|---|
+| 1M requests/day | 90,909 | $580,682/yr | $6,188/yr |
+| 3M requests/day | 272,727 | $1,742,045/yr | $18,565/yr |
+
+My modelled monthly-cadence figure was $846,912. It lands between those two, which is
+about as much agreement as you can expect from two sets of guesses. The assumptions
+aren't verified, but they're not wild either.
+
+The ratio is the part that doesn't move. Grounded costs 94x ungrounded at every scale in
+that table, because both sides scale linearly and the per-prompt SKU dominates. That
+conclusion holds whatever the real prompt count turns out to be, which is the useful
+thing about it.
+
+One number is worth sitting with. If the entire grounded arm ran through the paid
+grounding SKU at a million requests a day, that's **$12.8M a year**, against a company
+that has raised about $20M. So either the real per-model volume is well below that, or
+the search-augmented layer is sourced somewhere other than the billed grounding API.
+Evertune's own methodology writing points at the second: it describes the search layer as
+coming from consumer app surfaces and the API as the way to isolate base-model knowledge.
+
+That matters for this integration. If Vertex grounding is only ever used for the
+foundational arm, or for spot checks rather than the full 100 samples, the cost picture in
+this section is far less alarming than the headline suggests. It's the first question I'd
+ask before optimising anything.
 
 The $35/1k grounding rate is verified against Google's billing catalog, so that is not
 the weak link. The assumptions worth challenging are prompts per report, number of
@@ -913,10 +1035,26 @@ unit re-run days apart.
 **Does temperature interact with prompt wording?** One prompt template, English only. A
 differently-phrased question could sit at a different point on that curve.
 
-**How does this compare to another vendor's model?** Together is already in the repo and
-the harness accepts `--provider together`, but I don't have a key. Worth noting the
-comparison I'd most want, grounded versus grounded, isn't available anyway, since
-Together has no first-party web search.
+**How does this compare to another vendor's model?** The wiring exists, `--provider
+together` is already a flag on the harness, and the run itself is trivially cheap. A
+Together account needs a $5 minimum top-up and 200 requests at this workload's token
+counts costs about four cents on Llama 3.3 70B, or nothing at all on one of their
+zero-priced serverless models. Cost isn't the reason I stopped.
+
+Two things are. Together has **no first-party web search**, which I checked rather than
+assumed: their own documentation for building a search-augmented app wires in a
+third-party search API and passes the results into the prompt. So the arm that carries
+99% of the bill and most of the interesting behaviour has no counterpart there. Any
+comparison I ran would be ungrounded against ungrounded, which is the cheap half of the
+measurement and the half least likely to differ operationally.
+
+The second is a scope judgement. Evertune tracks 11+ models and treats each as its own
+target, so "how does Llama answer this" is a question about their product surface, not
+about whether this Gemini integration holds up. I'd rather hand over one provider I've
+measured properly than two I've sampled.
+
+If it's wanted, it's an afternoon and a $5 top-up, and the harness already emits
+comparable manifests for both.
 
 ---
 
@@ -924,21 +1062,30 @@ Together has no first-party web search.
 
 ## Where each number came from
 
-Findings carry one of three evidence classes. I kept them separate rather than
-presenting harness numbers as vendor measurements.
+Every number carries one of four labels. I kept them separate rather than presenting
+harness output as a vendor measurement.
 
-**Measured**, live requests against Vertex AI, project `evertune-tests`,
-`us-central1`, unless a section says otherwise. Real model, real billing, real failure
-modes.
+**Measured.** Live requests against Vertex AI, project `evertune-tests`, `us-central1`
+unless a section says otherwise. Real model, real billing, real failure modes.
 
-**Validated**, produced against the fake Vertex endpoint in `mock/`, which exercises
-the full HTTP path, the real SDK and the real connection pool at zero cost. Used for
-mechanism proofs where the vendor is deliberately held constant, and for failure modes
-that can't be provoked on demand against a real vendor.
+**Validated.** Produced against the fake Vertex endpoint in `mock/`, which exercises the
+full HTTP path, the real SDK and the real connection pool at zero cost. Used for two
+things: mechanism proofs where the vendor is deliberately held constant, and failure
+modes that a real vendor won't produce on demand. A validated number describes our code,
+never Google's capacity.
 
-**Measured on the Developer API**, live requests on my own personal key, from before
-GCP access came through. Model behaviour and token economics transfer; throughput and
-latency don't, and no capacity claim here rests on them.
+**Verified.** Checked against an authoritative external source rather than measured by
+me. Only the pricing rates are in this class, and they come from Google's Cloud Billing
+Catalog API, which is the data invoices are generated from.
+
+**Modelled.** Arithmetic on measured unit costs plus a stated assumption. The annual
+projections are the only ones, and section 5 lists which inputs are Evertune's and which
+are mine.
+
+One thing worth saying plainly, since the early work ran on a personal Gemini Developer
+API key while GCP access was pending. Nothing in the table below rests on it. Everything
+that touches cost, capacity or latency was re-run against `evertune-tests` once the
+project was live, because those numbers don't transfer between endpoints.
 
 | Finding | Class | Data |
 |---|---|---|
@@ -961,7 +1108,8 @@ latency don't, and no capacity claim here rests on them.
 | Concurrency ceiling 128 | measured | `capacity/vertex-*` |
 | HTTP/2 | measured | `capacity/vertex-http2-*` |
 | Adaptive limiter | validated | `local/adaptive-experiment.txt` |
-| Pricing rates | verified | Cloud Billing Catalog API |
+| Pricing rates | verified | Cloud Billing Catalog API, `scripts/verify_pricing.py` |
+| Annual cost projections | modelled | measured unit cost x stated cadence, section 5 |
 
 ## What's committed
 
@@ -1008,61 +1156,62 @@ directory the whole time. `scripts/confidence.py` now derives it from those.
 
 ---
 
-# Appendix B: Where I was wrong
+# Appendix B: What I got wrong, and the check that would have caught it
 
-Six corrections worth recording, because in most cases the mistake is more useful than
-the number.
+Six numbers in this document changed after I first wrote them down. The individual
+mistakes are not very interesting. The pattern is, because five of the six are the same
+one: I had a figure from somewhere convenient and I didn't go to the source.
 
-**The grounding rate.** I carried $25 per 1,000 grounded prompts through four sections,
-hedged with "verify against an invoice." Then I queried Google's Cloud Billing Catalog
-API, the same data invoices are generated from, and got **$35 per 1,000**, with a
-1,500-prompt free allowance rather than the ~5,000 I'd assumed. Every grounded figure
-here moved up 40%.
+| What I claimed | What's true | What I skipped |
+|---|---|---|
+| Grounding is $25/1k prompts | **$35/1k**, free tier 1,500 not ~5,000 | Querying the billing catalog |
+| Pool p50 of 4,162 ms | That was the mean. p50 is 516 ms | Re-deriving from raw records |
+| Neato vanishes when grounded | 11 vs 8, not significant | Recounting instead of reading a truncated summary |
+| p99 climbs 37% over a soak | Oscillates 3.7 to 9.6 s, no trend | Running long enough to see a shape |
+| Context caching saves ~1.02x | Impossible here, needs 2,048 input tokens | Checking the minimum before modelling |
+| Thinking costs 4.0x | 3.60x here, 38.5x on a terse prompt | Asking whether the ratio was portable |
 
-The same query confirmed all four token rates to the cent. So the check that corrected
-one number validated four others. The authoritative source was cheaper to consult than
-the approximation, and I should have gone there before hedging.
+Each one cost minutes to check and I checked none of them until something forced it.
 
-**A mean labelled as a median.** The connection-pool table originally reported 4,162 ms
-in a column headed "p50." That was the mean. Real p50 is 516 ms and stays flat at every
-pool size. The conclusion survived and the throughput numbers reproduced, but here the
-difference between mean and median *is* the finding, I'd have shipped a table that
-undersold its own point. Caught by re-running the experiment to produce committed
-evidence for a table that previously had none.
+**The grounding rate is the clearest case.** I carried $25 per 1,000 grounded prompts
+through four sections, hedged with "verify against an invoice," and shipped a draft that
+way. Then I queried Google's Cloud Billing Catalog API, the same data the invoices are
+generated from, and got $35. Every grounded figure moved up 40%. The same query confirmed
+all four token rates to the cent, so one API call corrected one number and validated four
+others. The authoritative source was cheaper to consult than the approximation I used
+instead of it. That's now `scripts/verify_pricing.py`, and it exits non-zero on a
+mismatch, so the next rate change fails a check rather than sitting in a document.
 
-**A brand story built on a display artifact.** My analysis script truncated a counter
-with `most_common(12)`, so any brand ranking below twelfth printed as 0 rather than its
-real count. I wrote a paragraph about Neato appearing only in the ungrounded condition
-and tied it to the company's 2023 bankruptcy. Neato is 11 versus 8. Not significant.
-The story was clean, plausible, and about nothing. Computing confidence intervals forced
-a recount from source, which is the only reason it surfaced.
+**Two of them only surfaced because I was doing something else.** The mean-labelled-as-p50
+came out of re-running the pool experiment to produce committed evidence for a table that
+had none. The Neato story came out of computing confidence intervals, which forced a
+recount from the raw counter and revealed that my script's `most_common(12)` had been
+printing 0 for every brand below twelfth. I had written a tidy paragraph tying Neato's
+absence to the company's 2023 bankruptcy. Clean, plausible, and about a display bug.
 
-**A p99 trend that wasn't.** An 8.7-minute soak showed p99 rising 37% between halves and
-I wrote it up as a queue forming upstream. A 20.8-minute run refuted it: p99 oscillates
-between 3.7 and 9.6 s with no trend. Nine windows was enough to see a shape that wasn't
-there.
+Neither was caught by review or by rereading. Both were caught by regenerating the number
+from source for an unrelated reason, which is an uncomfortable thing to notice about your
+own process.
 
-**A cost saving that can't physically occur.** I modelled context caching at a ~1.02x
-saving. Implicit caching on 2.5 Flash needs 2,048 input tokens minimum and the workload
-is 35, 58x below the floor. The effect isn't small here, it's impossible. The number was
-tiny enough that it never looked worth checking, which is exactly how an unfalsifiable
-assumption reaches a headline.
+**The thinking multiplier is the one that would have travelled furthest.** I reported 4.0x
+from n=15. Bootstrapping that sample afterwards gives a 95% interval of [2.36, 7.42],
+which is not a measurement, it's a rumour with a decimal point. Re-running at n=100 gave
+3.60x [3.00, 4.35]. But the useful correction isn't the tighter number. It's that a
+verbosity test showed the same setting costing 38.5x on a terse prompt, because the ratio
+is roughly (thinking + answer) / answer and therefore governed by how long the answer
+would have been anyway. I was about to hand someone a constant that was actually a
+property of my prompt. What transfers is the share, about 77% of billed output is
+reasoning.
 
-**A multiplier quoted as if it were a constant.** I reported thinking as "4.0x more
-expensive" from n=15, which is true for our prompt and misleading everywhere else. The
-ratio is roughly (thinking + answer) / answer, so it's governed by how verbose the
-un-thought answer would have been. On a terse prompt the same setting costs **38.5x**.
-Re-running at n=100 confirmed 3.6x for our workload and tightened the interval, but the
-useful correction is that the number was never portable. And I'd have shipped it as
-though it were. The share of billed output that is reasoning (~77%) is the part that
-actually transfers.
+**And one was unfalsifiable from the start.** I modelled context caching at a 1.02x saving
+without checking that implicit caching needs 2,048 input tokens. The workload sends 35.
+The effect isn't small, it's structurally impossible. The number was tiny enough that it
+never looked worth verifying, which is precisely how a wrong assumption reaches a summary
+table: it doesn't matter enough to check, so nobody checks it, so it stays.
 
-**A mechanism generalised from one brand.** A single-category pilot found Anker swinging
-92% to 14% with temperature and I traced it to phrasing, Anker appears mostly inside
-"Eufy (Anker)", and temperature changes how often the model bothers with the aside. I
-generalised that into a claim about aside-mentioned brands. Across 11 categories only 2
-of 116 brands qualified as aside-mentioned, and every one of the largest swings was a
-direct mention. True about one brand, generalised on a sample of one.
+The habit I'd take forward is narrow. Any number I'm about to put in front of someone else
+either comes with an interval, a committed file it can be regenerated from, or a named
+source I actually queried. Three of the six above would have failed that test on sight.
 
 ---
 

@@ -6,7 +6,7 @@ Backend selection
 (ADC credentials, project + location) and the Gemini Developer API (an API key).
 Vertex is the production target; the developer API is useful for functional iteration
 when Vertex credentials are not available. They are *not* interchangeable for
-capacity work — different quota pools, different endpoints, different scaling
+capacity work: different quota pools, different endpoints, different scaling
 behavior. Anything measured against the developer API is a smoke test, not evidence.
 
 Notable deviations from the Together provider

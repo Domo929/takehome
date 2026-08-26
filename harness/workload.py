@@ -85,12 +85,12 @@ def build_corpus(
     Two shapes, because they measure different things:
 
     * ``repeat_prompt=False`` (default) builds ``size`` *distinct* prompts. This is the
-      right shape for throughput work — varied inputs make it impossible to
+      right shape for throughput work, because varied inputs make it impossible to
       accidentally measure a cache instead of the vendor.
     * ``repeat_prompt=True`` repeats a single prompt ``size`` times, which is the real
       unit of work: Evertune samples one prompt 100 times and reads the distribution.
 
-    Throughput does not care which is used — the workload is request-bound rather than
+    Throughput does not care which is used. The workload is request-bound rather than
     content-bound, and at ~35 input tokens nothing is cacheable either way (FINDINGS
     6c). Interpretation cares a great deal, so the shape is explicit rather than
     implied.

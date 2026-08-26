@@ -206,19 +206,19 @@ panels += [
 y += 4
 
 panels.append(annolist(
-    "Recent runs — click one to window the dashboard to it", 0, y, h=7,
+    "Recent runs, click one to window the dashboard to it", 0, y, h=7,
     desc="Each entry is a k6 run recorded by scripts/k6run.py. Clicking re-windows "
          "every panel to that run. Runs also appear as shaded regions on the time "
          "series below, so a spike can be attributed to a specific configuration."))
 y += 7
 
 # ------------------------------------------------------------- latency layers
-panels.append(row("Latency layers — where the time actually goes", y))
+panels.append(row("Latency layers: where the time actually goes", y))
 y += 1
 panels.append(text(
     "",
     "`total = queue_wait + upstream + framework`. **upstream** is Vertex and is not "
-    "ours to fix. **queue_wait** is our admission gate — growth here is the earliest "
+    "ours to fix. **queue_wait** is our admission gate, so growth here is the earliest "
     "saturation signal. **framework** is serialization, validation and event-loop "
     "scheduling. If the stack is dominated by upstream, our integration is not the "
     "problem.",
@@ -363,7 +363,7 @@ panels.append(
 y += 6
 
 # ------------------------------------------------------- saturation / capacity
-panels.append(row("Saturation and capacity — is the ceiling us or them?", y))
+panels.append(row("Saturation and capacity: is the ceiling us or them?", y))
 y += 1
 panels += [
     ts("Connection pool saturation", targets(
@@ -394,7 +394,7 @@ panels.append(
 y += 5
 
 # -------------------------------------------------------------- load generator
-panels.append(row("Load generator (k6) — is the rig itself the bottleneck?", y))
+panels.append(row("Load generator (k6): is the rig itself the bottleneck?", y))
 y += 1
 panels.append(text(
     "",
@@ -431,7 +431,7 @@ panels += [
 
 dashboard = {
     "uid": "takehome-overview",
-    "title": "Gemini Integration — Overview",
+    "title": "Gemini Integration: Overview",
     "description": "Every metric the integration emits, organized by question.",
     "tags": ["takehome", "overview"],
     "timezone": "browser",
@@ -472,4 +472,4 @@ dashboard = {
 
 OUT.parent.mkdir(parents=True, exist_ok=True)
 OUT.write_text(json.dumps(dashboard, indent=2))
-print(f"wrote {OUT} — {len(panels)} panels, {_id} ids")
+print(f"wrote {OUT}: {len(panels)} panels, {_id} ids")

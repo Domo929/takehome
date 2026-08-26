@@ -143,7 +143,7 @@ def main() -> int:
     if proc.returncode != 0:
         detail.append(f"exit={proc.returncode}")
 
-    text = label + (f" — {', '.join(detail)}" if detail else "")
+    text = label + (f": {', '.join(detail)}" if detail else "")
     tags = ["k6run", args.scenario, args.target]
     if proc.returncode != 0:
         tags.append("failed")

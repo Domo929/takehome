@@ -4,7 +4,7 @@
 Running experiments on someone else's cloud project creates an obligation to be able
 to answer "what has this cost you?" precisely, at any moment, without reconstructing
 it from memory. This reads every run manifest on disk and reports actual spend from
-reported ``usage_metadata`` — never estimates — broken down by the account it was
+reported ``usage_metadata``, never estimates, broken down by the account it was
 billed to.
 
 Ad-hoc probes made outside the harness (single curl calls, access checks) do not

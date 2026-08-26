@@ -1,6 +1,6 @@
 {
   "uid": "takehome-overview",
-  "title": "Gemini Integration \u2014 Overview",
+  "title": "Gemini Integration: Overview",
   "description": "Every metric the integration emits, organized by question.",
   "tags": [
     "takehome",
@@ -546,7 +546,7 @@
     {
       "id": 10,
       "type": "annolist",
-      "title": "Recent runs \u2014 click one to window the dashboard to it",
+      "title": "Recent runs, click one to window the dashboard to it",
       "description": "Each entry is a k6 run recorded by scripts/k6run.py. Clicking re-windows every panel to that run. Runs also appear as shaded regions on the time series below, so a spike can be attributed to a specific configuration.",
       "gridPos": {
         "h": 7,
@@ -572,7 +572,7 @@
     {
       "id": 11,
       "type": "row",
-      "title": "Latency layers \u2014 where the time actually goes",
+      "title": "Latency layers: where the time actually goes",
       "description": "",
       "gridPos": {
         "h": 1,
@@ -595,7 +595,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "`total = queue_wait + upstream + framework`. **upstream** is Vertex and is not ours to fix. **queue_wait** is our admission gate \u2014 growth here is the earliest saturation signal. **framework** is serialization, validation and event-loop scheduling. If the stack is dominated by upstream, our integration is not the problem."
+        "content": "`total = queue_wait + upstream + framework`. **upstream** is Vertex and is not ours to fix. **queue_wait** is our admission gate, so growth here is the earliest saturation signal. **framework** is serialization, validation and event-loop scheduling. If the stack is dominated by upstream, our integration is not the problem."
       }
     },
     {
@@ -1773,7 +1773,7 @@
     {
       "id": 34,
       "type": "row",
-      "title": "Saturation and capacity \u2014 is the ceiling us or them?",
+      "title": "Saturation and capacity: is the ceiling us or them?",
       "description": "",
       "gridPos": {
         "h": 1,
@@ -2008,7 +2008,7 @@
     {
       "id": 39,
       "type": "row",
-      "title": "Load generator (k6) \u2014 is the rig itself the bottleneck?",
+      "title": "Load generator (k6): is the rig itself the bottleneck?",
       "description": "",
       "gridPos": {
         "h": 1,

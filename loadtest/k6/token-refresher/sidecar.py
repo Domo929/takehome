@@ -5,7 +5,7 @@ mints one via Application Default Credentials and serves it over localhost.
 
 There is a second reason to make this a separate, observable component. ADC access
 tokens live about an hour, and a fleet of clients that all refresh on the same
-schedule produces a synchronized stall against the token endpoint — a real production
+schedule produces a synchronized stall against the token endpoint, a real production
 thundering-herd risk that stays invisible while the refresh is buried inside an SDK.
 Exposing it here makes the refresh boundary something a soak test can actually cross
 and measure.

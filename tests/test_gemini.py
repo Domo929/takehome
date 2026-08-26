@@ -417,7 +417,7 @@ def test_cached_input_tokens_are_discounted_not_double_charged():
 async def test_failures_are_logged_with_diagnostic_metadata(fake_vertex):
     """A failure must carry enough context to diagnose without a repro.
 
-    Successful requests are deliberately not logged — at 100k requests/day that is
+    Successful requests are deliberately not logged, because at 100k requests/day that is
     noise, and Prometheus already answers "how many" and "how fast". Failures are
     rare enough that a fat record is cheap.
     """
@@ -513,3 +513,50 @@ def test_client_errors_are_not_retried():
     bad = genai_errors.APIError(400, {"message": "Invalid value at 'generation_config'"})
 
     assert not provider._translate(bad).retryable
+
+
+def test_thinking_is_off_unless_someone_asks_for_it(monkeypatch):
+    """Vertex defaults thinking on. We default it off, and that has to stay true.
+
+    A request carrying no thinkingConfig comes back with ~212 billed thinking tokens
+    (results/real/model/think-dyn-n100-*). Nothing warns you: the answer looks normal
+    and the cost lands on the invoice weeks later. So the provider's default is the
+    control, and this pins it. If a refactor ever lets the vendor default through,
+    every request on the platform gets quietly more expensive.
+    """
+    monkeypatch.delenv("GEMINI_THINKING_BUDGET", raising=False)
+    provider = Gemini(backend="vertex", project="p", location="global")
+
+    assert provider._thinking_budget == 0
+
+
+def test_thinking_can_be_turned_on_by_configuration(monkeypatch):
+    """Off by default is a decision, not a hardcoding. Grounded runs need it back on."""
+    monkeypatch.setenv("GEMINI_THINKING_BUDGET", "1024")
+    assert Gemini(backend="vertex", project="p", location="global")._thinking_budget == 1024
+
+    # Explicit argument beats the environment, so a caller can override per provider.
+    provider = Gemini(backend="vertex", project="p", location="global", thinking_budget=0)
+    assert provider._thinking_budget == 0
+
+
+def test_temperature_default_is_the_measured_one():
+    """1.0 was measured, not inherited. At 0 the metric stops working.
+
+    The temperature sweep found 0 of 103 brands landing between 10% and 90% mention
+    rate at temperature 0 (results/real/measurement/temperature-multi-*). The measure
+    goes binary: every brand is always named or never named, and a share-of-voice
+    number it cannot express is worse than a noisy one. Three call sites have to agree
+    on this, so it is worth pinning in one place.
+    """
+    import inspect
+
+    from harness.run import main as harness_main  # noqa: F401
+    from service.app import AskRequest
+
+    assert AskRequest.model_fields["temperature"].default == 1.0
+
+    from harness import run as harness_run
+    for fn in (harness_run.run_closed_loop, harness_run.run_open_loop, harness_run._one_request):
+        default = inspect.signature(fn).parameters["temperature"].default
+        assert default == 1.0, f"{fn.__name__} disagrees with the measured default"

@@ -1,4 +1,4 @@
-# Convenience targets. These also serve as the canonical invocations — every flag
+# Convenience targets. These also serve as the canonical invocations. Every flag
 # here exists for a reason documented in RUNBOOK.md.
 
 PY := .venv/bin/python

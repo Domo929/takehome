@@ -2,7 +2,7 @@
 
 Thinking reasons harder over training data. Grounding injects live web results. They
 have different API surfaces, different billing, and answer different product
-questions — "what does the model believe about this brand" versus "what can it find
+questions. "What does the model believe about this brand" versus "what can it find
 about this brand today". A brand-tracking system that ran one and reported the other
 would be measuring the wrong thing.
 """

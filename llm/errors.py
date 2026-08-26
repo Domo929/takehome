@@ -65,7 +65,7 @@ class LLMEmptyResponseError(LLMError):
 
 
 class LLMContentBlockedError(LLMError):
-    """Safety filter, recitation, or blocklist. Terminal — retrying re-triggers it."""
+    """Safety filter, recitation, or blocklist. Terminal, because retrying re-triggers it."""
 
     retryable = False
 
