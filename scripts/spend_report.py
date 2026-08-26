@@ -38,8 +38,41 @@ UNTRACKED = [
 ]
 
 
-def load_manifests() -> list[dict]:
+def _k6_rows() -> list[dict]:
+    """k6 writes its own summary shape and does not use the -manifest suffix.
+
+    Scanned separately rather than shoehorned into the manifest parser. k6 runs bill
+    the same project as everything else, so leaving them out understates real spend,
+    which is the failure this whole script exists to prevent. It cost the ledger a
+    $3.85 run before this existed.
+    """
     rows = []
+    for f in sorted((REPO / "results").rglob("k6-*.json")):
+        try:
+            m = json.loads(f.read_text())
+        except json.JSONDecodeError:
+            continue
+        if "target" not in m or "cost_usd" not in m:
+            continue
+        if m.get("target") != "vertex":
+            continue  # mock-backed rehearsal, modelled dollars, nothing spent
+        rows.append(
+            {
+                "label": f.stem,
+                "backend": "vertex",
+                "location": "-",
+                "model": m.get("model", "-"),
+                "requests": m.get("requests", 0),
+                "cost": m.get("cost_usd", 0.0),
+                "tokens_in": 0,
+                "tokens_out": 0,
+            }
+        )
+    return rows
+
+
+def load_manifests() -> list[dict]:
+    rows = _k6_rows()
     for f in sorted((REPO / "results").rglob("*-manifest.json")):
         try:
             m = json.loads(f.read_text())
@@ -53,6 +86,16 @@ def load_manifests() -> list[dict]:
             "location": m.get("location", "-"),
             "model": m.get("model", "-"),
         }
+        # A run against the local mock still says backend="vertex", because only the
+        # URL was swapped. Counting it charges fake money to a real project, which is
+        # the one thing this script must never do. Older manifests predate the flag,
+        # so fall back to sniffing the URL.
+        base_url = p.get("base_url") or m.get("base_url")
+        billable = p.get("billable")
+        if billable is None:
+            billable = not (base_url and ("127.0.0.1" in base_url or "localhost" in base_url))
+        if not billable:
+            continue
         stages = m.get("stages", [])
         requests = sum(s.get("requests", 0) for s in stages) or m.get("requests", 0)
         rows.append(

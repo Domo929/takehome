@@ -1,0 +1,240 @@
+{
+  "label": "notls-sweep",
+  "mode": "closed",
+  "provider": {
+    "provider": "gemini",
+    "backend": "vertex",
+    "model": "gemini-2.5-flash",
+    "location": "global",
+    "max_output_tokens": 512,
+    "thinking_budget": 0,
+    "grounded": false,
+    "max_connections": 2048,
+    "http2": false,
+    "parallelism": 128,
+    "max_attempts": 4,
+    "attempt_timeout_s": 60.0,
+    "total_deadline_s": 180.0,
+    "base_url": "http://127.0.0.1:8088",
+    "billable": false
+  },
+  "corpus": {
+    "size": 200,
+    "fingerprint": "a09f8bd0739f197f",
+    "mean_input_chars": 53.6,
+    "complex_fraction": 0.0,
+    "temperature": 1.0,
+    "repeat_prompt": false
+  },
+  "estimate_usd": 8.2208,
+  "started_at": 1787724373.0999634,
+  "stages": [
+    {
+      "label": "notls-sweep-c64",
+      "mode": "closed",
+      "concurrency": 64,
+      "arrival_rate": 0.0,
+      "duration_s": 26.844,
+      "requests": 1152,
+      "successful": 1058,
+      "error_rate": 0.0816,
+      "throughput_rps": 39.413,
+      "output_tokens_per_s": 15255.3,
+      "latency_ms": {
+        "p50": 1394.0,
+        "p90": 1978.2,
+        "p95": 2253.3,
+        "p99": 2752.8,
+        "max": 3577.9,
+        "mean": 1435.6
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 0,
+      "warmup_s": 0.0,
+      "warmup_requests": 0,
+      "cost_usd": 1.148904,
+      "tokens": {
+        "input": 16014,
+        "output": 457640,
+        "thinking": 0
+      },
+      "errors_by_class": {
+        "": 94
+      },
+      "finish_reasons": {
+        "STOP": 1058,
+        "MAX_TOKENS": 94
+      },
+      "windows": [
+        {
+          "window_start_s": 0.0,
+          "requests": 1152,
+          "successful": 1058,
+          "rps": 35.27,
+          "p50_ms": 1394.0,
+          "p99_ms": 2877.0,
+          "errors_by_class": {},
+          "retries": 0,
+          "event_loop_lag_ms": 59.0,
+          "pool_saturation": 0.031
+        }
+      ]
+    },
+    {
+      "label": "notls-sweep-c128",
+      "mode": "closed",
+      "concurrency": 128,
+      "arrival_rate": 0.0,
+      "duration_s": 27.461,
+      "requests": 2287,
+      "successful": 2105,
+      "error_rate": 0.07958,
+      "throughput_rps": 76.655,
+      "output_tokens_per_s": 29578.2,
+      "latency_ms": {
+        "p50": 1382.0,
+        "p90": 1978.9,
+        "p95": 2210.4,
+        "p99": 2640.3,
+        "max": 3693.1,
+        "mean": 1437.3
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 0,
+      "warmup_s": 0.0,
+      "warmup_requests": 0,
+      "cost_usd": 2.273104,
+      "tokens": {
+        "input": 31798,
+        "output": 905426,
+        "thinking": 0
+      },
+      "errors_by_class": {
+        "": 182
+      },
+      "finish_reasons": {
+        "STOP": 2105,
+        "MAX_TOKENS": 182
+      },
+      "windows": [
+        {
+          "window_start_s": 0.0,
+          "requests": 2287,
+          "successful": 2105,
+          "rps": 70.17,
+          "p50_ms": 1382.0,
+          "p99_ms": 2640.0,
+          "errors_by_class": {},
+          "retries": 0,
+          "event_loop_lag_ms": 28.3,
+          "pool_saturation": 0.062
+        }
+      ]
+    },
+    {
+      "label": "notls-sweep-c256",
+      "mode": "closed",
+      "concurrency": 256,
+      "arrival_rate": 0.0,
+      "duration_s": 27.646,
+      "requests": 4397,
+      "successful": 4063,
+      "error_rate": 0.07596,
+      "throughput_rps": 146.964,
+      "output_tokens_per_s": 56727.8,
+      "latency_ms": {
+        "p50": 1383.0,
+        "p90": 2155.5,
+        "p95": 2574.6,
+        "p99": 3221.5,
+        "max": 5406.6,
+        "mean": 1486.1
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 0,
+      "warmup_s": 0.0,
+      "warmup_requests": 0,
+      "cost_usd": 4.366627,
+      "tokens": {
+        "input": 61098,
+        "output": 1739319,
+        "thinking": 0
+      },
+      "errors_by_class": {
+        "": 334
+      },
+      "finish_reasons": {
+        "STOP": 4063,
+        "MAX_TOKENS": 334
+      },
+      "windows": [
+        {
+          "window_start_s": 0.0,
+          "requests": 4397,
+          "successful": 4063,
+          "rps": 135.43,
+          "p50_ms": 1383.0,
+          "p99_ms": 3229.0,
+          "errors_by_class": {},
+          "retries": 0,
+          "event_loop_lag_ms": 379.3,
+          "pool_saturation": 0.125
+        }
+      ]
+    },
+    {
+      "label": "notls-sweep-c512",
+      "mode": "closed",
+      "concurrency": 512,
+      "arrival_rate": 0.0,
+      "duration_s": 29.546,
+      "requests": 2147,
+      "successful": 1980,
+      "error_rate": 0.07778,
+      "throughput_rps": 67.013,
+      "output_tokens_per_s": 25828.4,
+      "latency_ms": {
+        "p50": 6007.5,
+        "p90": 9594.9,
+        "p95": 11366.6,
+        "p99": 13206.2,
+        "max": 13724.8,
+        "mean": 6192.4
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 11,
+      "warmup_s": 0.0,
+      "warmup_requests": 0,
+      "cost_usd": 2.130546,
+      "tokens": {
+        "input": 29845,
+        "output": 848637,
+        "thinking": 0
+      },
+      "errors_by_class": {
+        "": 167
+      },
+      "finish_reasons": {
+        "STOP": 1980,
+        "MAX_TOKENS": 167
+      },
+      "windows": [
+        {
+          "window_start_s": 0.0,
+          "requests": 2147,
+          "successful": 1980,
+          "rps": 66.0,
+          "p50_ms": 6008.0,
+          "p99_ms": 13230.0,
+          "errors_by_class": {},
+          "retries": 11,
+          "event_loop_lag_ms": 3621.2,
+          "pool_saturation": 0.25
+        }
+      ]
+    }
+  ],
+  "actual_usd": 9.919182,
+  "finished_at": 1787724484.661946,
+  "note": "Mock-backed. The dollar figures are the cost model doing arithmetic on simulated tokens; nothing was spent. Recorded so the run is reproducible, flagged so the ledger ignores it."
+}

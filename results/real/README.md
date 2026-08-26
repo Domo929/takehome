@@ -12,7 +12,7 @@ experiments, since the analysis scripts re-derive their results from them. Per-r
 records for the load runs are not: that is 20 MB of one line per request for throughput
 tests whose manifests already contain every derived figure.
 
-## `model/` — how Gemini itself behaves
+## `model/`: how Gemini itself behaves
 
 | File | What it measured |
 |---|---|
@@ -25,7 +25,7 @@ tests whose manifests already contain every derived figure.
 | `review-probes-*` | Thinking default with no config set. Tools alongside grounding. |
 | `flash-lite-*` | 2.5 Flash-Lite across 11 categories, for the model comparison. |
 
-## `measurement/` — properties of the brand-tracking method
+## `measurement/`: properties of the brand-tracking method
 
 | File | What it measured |
 |---|---|
@@ -36,7 +36,7 @@ tests whose manifests already contain every derived figure.
 | `structured-output-*` | `responseSchema` vs prose, and whether it works with grounding. |
 | `logprobs-experiment.json` | What logprobs see that 100 samples miss. |
 
-## `capacity/` — Vertex under sustained load
+## `capacity/`: Vertex under sustained load
 
 | File | What it measured |
 |---|---|
@@ -47,7 +47,7 @@ tests whose manifests already contain every derived figure.
 | `vertex-http2-*` | HTTP/2 at the same concurrencies. A negative result. |
 | `vertex-sweep-*`, `vertex-sweep2-*` | Early exploratory sweeps. |
 
-## `local/` — runs against the mock, or pure analysis
+## `local/`: runs against the mock, or pure analysis
 
 | File | What it measured |
 |---|---|
@@ -78,3 +78,22 @@ to 44%.
 Dynamic Shared Quota moves with regional demand. It does not appear to: off-peak was
 14% slower rather than faster, and no run in this folder has ever recorded a rate-limit
 error.
+
+## Finding the actual ceiling
+
+`capacity/k6-vertex-ceiling.json` is the run that answers "how much will Vertex take?".
+550 requests per second, zero rejections, zero failed requests. It does not find Vertex's
+limit, it finds the top of the ramp I configured, which is a different thing and the file
+says so.
+
+Three supporting runs, all free, narrow down what the real constraint is:
+
+- `local/k6-rig-calibration.json` puts a floor under the test rig. k6 on this machine
+  delivers a 4,000 rps schedule with no dropped iterations, so at 550 rps it was coasting.
+- `local/notls-sweep-manifest.json` runs the Python client against the mock over plain
+  HTTP with latency tuned to match Vertex. Removing TLS moves the collapse from about 256
+  concurrent to about 512.
+- `local/k6-mock-611-concurrent.json` rules out the mock as the bottleneck: k6 holds 611
+  concurrent against it at 400 rps with a clean p50.
+- `local/multiprocess-experiment.json` is the one that matters. The same 512 concurrent
+  requests give 67 rps through one process and 307 rps through four.

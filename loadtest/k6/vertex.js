@@ -15,7 +15,7 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { scenarios, thresholds } from './scenarios.js';
-import { authHeaders, authMode, endpointUrl, modelId } from './lib/auth.js';
+import { authHeaders, authMode, endpointUrl, modelId, target } from './lib/auth.js';
 import { SYSTEM_PROMPT, buildQuestion } from './lib/workload.js';
 import {
   SUMMARY_TREND_STATS, baseSummary, dropWarning, rateLimited,
@@ -91,20 +91,27 @@ export default function () {
 
 export function handleSummary(data) {
   const out = baseSummary(data, (count) => ({
-    target: 'vertex',
+    // Reported, not assumed. This file is usually pointed at Vertex but TARGET=mock
+    // is how the whole path gets exercised for free, and a summary that always says
+    // "vertex" turns a $0 rehearsal into evidence about Google.
+    target: target(),
     model: modelId(),
     max_output_tokens: MAX_OUTPUT_TOKENS,
     thinking_budget: THINKING_BUDGET,
     auth_mode: authMode(),
-    // Should be ~= number of VUs. If it approaches the request count, token caching
-    // is broken and every request is paying for an auth round trip.
-    token_refreshes: count('http_reqs{name:token-refresh}'),
+    // Derived rather than read from a tagged submetric: k6 only exports submetrics
+    // that a threshold references, so counting http_reqs{name:token-refresh}
+    // silently returns 0. Every iteration makes exactly one generateContent call,
+    // so the excess over iterations is auth traffic. This should be about the VU
+    // count. If it approaches the request count, per-VU token caching is broken and
+    // the run is measuring Google's OAuth endpoint rather than Vertex.
+    token_refreshes: count('http_reqs') - count('iterations'),
   }));
 
   const outFile = __ENV.K6_SUMMARY_OUT || 'results/k6-vertex-summary.json';
   return {
     stdout:
-      `\nk6 -> Vertex direct (${out.model}), scenario=${out.scenario}\n` +
+      `\nk6 -> ${out.target} direct (${out.model}), scenario=${out.scenario}\n` +
       `  thinking_budget=${THINKING_BUDGET} max_output_tokens=${MAX_OUTPUT_TOKENS}\n` +
       `  requests=${out.requests} rate_limited=${out.rate_limited} ` +
       `empty=${out.empty_responses} truncated=${out.truncated_responses}\n` +

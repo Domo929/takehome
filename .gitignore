@@ -263,7 +263,10 @@ results/real/*
 !results/real/*-manifest.json
 !results/real/*.txt
 results/real/*/*
-!results/real/*/*-manifest.json
+# Summaries and manifests are committed everywhere. The only thing held back is
+# per-request records from load runs, which are .jsonl and large. Note that *.json
+# does not match *.jsonl, so these two rules do not fight.
+!results/real/*/*.json
 !results/real/*/*.txt
 !results/real/model/**
 !results/real/measurement/**

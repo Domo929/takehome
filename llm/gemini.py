@@ -219,10 +219,15 @@ class Gemini(LLM):
             http2 if http2 is not None
             else os.getenv("GEMINI_HTTP2", "").lower() in ("1", "true", "yes")
         )
+        # Kept so manifests can record where a run actually went. A run against the
+        # mock still reports backend="vertex", because only the URL is swapped, and a
+        # spend ledger that cannot tell the two apart will bill fake money to a real
+        # project. That happened.
+        self._base_url = base_url or os.getenv("GEMINI_BASE_URL") or None
         http_options = types.HttpOptions(
             # v1beta1 drifts under us.
             api_version=None if self._backend == "developer" else "v1",
-            base_url=base_url or os.getenv("GEMINI_BASE_URL") or None,
+            base_url=self._base_url,
             async_client_args={"limits": limits, "http2": self._http2},
             # Unset on purpose: retries belong above, where metrics can see them.
         )
@@ -291,6 +296,8 @@ class Gemini(LLM):
         return {
             "provider": _PROVIDER,
             "backend": self._backend,
+            "base_url": self._base_url,
+            "billable": self._base_url is None,
             "model": self._model,
             "location": self._location,
             "max_output_tokens": self._max_output_tokens,

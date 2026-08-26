@@ -17,6 +17,7 @@ concurrent k6 VUs asking at once produce one upstream refresh rather than N.
 from __future__ import annotations
 
 import argparse
+import datetime
 import threading
 import time
 
@@ -40,8 +41,16 @@ class TokenCache:
         expiry = getattr(self._credentials, "expiry", None)
         if expiry is None:
             return time.time() + 3600.0
-        # google-auth stores expiry as a naive UTC datetime.
-        return expiry.replace(tzinfo=None).timestamp() - time.timezone
+        # google-auth stores expiry as a naive datetime that is already UTC. Calling
+        # .timestamp() on a naive datetime makes Python interpret it as LOCAL time,
+        # so it has to be labelled UTC first. Getting this wrong is silent and it
+        # inverts the whole point of the cache: the computed expiry lands in the past,
+        # needs_refresh is true on every call, and the sidecar mints a fresh token per
+        # request. That is the thundering herd this file exists to demonstrate, except
+        # aimed at Google's OAuth endpoint by the harness itself.
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=datetime.timezone.utc)
+        return expiry.timestamp()
 
     def get(self) -> tuple[str, float]:
         with self._lock:

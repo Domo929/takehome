@@ -9,7 +9,7 @@ analysis scripts re-derive their numbers from those files, so any figure can be 
 without spending a cent. Where I got something wrong and corrected it, the correction is
 in Appendix B rather than scattered through the text.
 
-Total spend on `evertune-tests`: **$49.48 across 99,887 requests**. Run
+Total spend on `evertune-tests`: **$53.33 across 127,340 requests**. Run
 `python scripts/spend_report.py` for the breakdown.
 
 ---
@@ -836,7 +836,7 @@ built for.
 
 So I went and tested the premise.
 
-### I never found Vertex's quota ceiling at all
+### Vertex was never the constraint, and I can now say by how much
 
 My first two soaks ran thirty minutes apart on a Monday afternoon in US hours. That's no
 test of whether capacity moves. I re-ran the identical configuration 32 hours later at
@@ -879,11 +879,135 @@ So I measured our own client's behaviour and reported it as the vendor's limit. 
 Vertex ceiling is somewhere above where I stopped, and I stopped because our TLS
 handshake path fell over at c=256, not because Vertex pushed back.
 
-That's the honest conclusion, and it makes the adaptive limiter's case weaker rather than
-stronger. A controller that keys on latency to find a quota wall is solving for a wall I
-have no evidence exists. Three runs, two demand regimes, 70,000 requests, no 429s. It
-stays off, and I'd want a run that deliberately climbs until Google actually rejects
-something before shipping it.
+So I measured our own client's behaviour and reported it as the vendor's limit.
+
+### So I pointed k6 at Vertex and went looking for the wall
+
+Our Python client can't answer this question. One event loop saturates its TLS path
+around 128 requests in flight, so it tops out near 74 rps and stops. k6 is Go, holds
+thousands of concurrent requests without breaking a sweat, and talks to Vertex directly
+with no service in the middle. That control arm was in the repo from the start. It had
+only ever run as a ten-request smoke test, which is a fair criticism of the work rather
+than of the tool.
+
+A ramp to 550 requests per second, output capped at 64 tokens so the bill stayed bounded,
+`evertune-tests`/us-central1 (`results/real/capacity/k6-vertex-ceiling.json`):
+
+| | |
+|---|---|
+| Peak offered rate | **550 rps**, held 20 s |
+| Requests | 26,743 |
+| **Rate limits (429)** | **0** |
+| Failed requests | **0.000%** |
+| Dropped iterations | 0 |
+| p50 / p95 / p99 | 803 ms / 1,081 ms / 1,380 ms |
+| Cost | $3.85 |
+
+Nothing broke. Vertex took 550 requests a second and roughly 35,000 output tokens a
+second without a single rejection, and p99 stayed under 1.4 seconds the whole way up.
+
+**Which means I did not find Vertex's limit. I found the number I typed into the
+config.** The ramp's top stage says `target: 550`, so k6 dispatched 550 and stopped. That
+is worth being blunt about, because a table full of zeroes can read like a discovery when
+it is really an absence.
+
+Three things say the generator wasn't the constraint either:
+
+| Signal | Value | What it rules out |
+|---|---|---|
+| `dropped_iterations` | **0** | k6 delivered every scheduled request |
+| VUs in use | 429 of 700 | 39% headroom in the pool |
+| `http_req_blocked` | 0.92 ms avg | almost no waiting for a connection slot |
+
+And `http_req_waiting` averaged 811 ms, which is Vertex thinking. That single number is
+99.9% of the response time. Nothing on my side was working hard.
+
+To put a floor under the rig itself I ran the calibration scenario against the mock, which
+ramps to 4,000 rps for free: **57,941 requests, zero dropped iterations, p99 81 ms**. So
+k6 on this machine delivers a 4,000 rps schedule without complaint. The Vertex run asked
+it for 550, about 14% of that.
+
+So the honest reading of the table is a floor, not a ceiling. Vertex sustained at least
+550 rps. Its actual limit is somewhere above, and I stopped because I had answered the
+question that mattered, not because Google made me.
+
+Put that next to our own numbers and the picture is unambiguous:
+
+| Path | Peak | 429s |
+|---|---|---|
+| Python client to Vertex | 73.7 rps | 0 |
+| **k6 to Vertex** | **550 rps** (as configured) | **0** |
+
+Same endpoint, same project, same region, same day. **7.5x more throughput from a
+different client.** The limit I spent three sections characterising is ours.
+
+Two more caveats. The 64-token cap keeps latency and cost down, so this bounds a request
+rate rather than a token-per-minute quota; production answers run about 145 tokens, and
+the same token throughput would be reached at roughly 240 rps. And a 95-second ramp says
+nothing about a sustained hour.
+
+The practical consequence for Evertune: a report refresh of 20,000 requests is about 36
+seconds of Vertex's time. Everything I measured before this was our single Python process
+queueing in front of a vendor that was idle.
+
+### So what is the constraint, exactly?
+
+"It's us" is not an answer anyone can act on. Four runs narrow it down, and three of them
+were free.
+
+**Take TLS out of the picture.** Same Python client, same concurrency points, but pointed
+at the mock over plain HTTP with its latency tuned to match Vertex's ~1.4 s
+(`results/real/local/notls-sweep-manifest.json`):
+
+| Concurrency | No TLS (mock) | With TLS (Vertex) |
+|---|---|---|
+| 64 | 39.4 rps | 36.1 rps |
+| 128 | 76.7 rps | 73.7 rps |
+| 256 | **147.0 rps** | **63.0 rps** |
+| 512 | 67.0 rps | (not run) |
+
+The two columns track each other until 256, where the TLS run falls off a cliff and the
+plaintext run keeps scaling. So TLS roughly halves the concurrency one process can carry.
+It moves the knee from about 512 down to about 256, and that is the cost of doing
+handshakes and record encryption on the same thread that dispatches requests.
+
+**But TLS isn't the whole story**, because the plaintext run collapses too, just later.
+Something else caps a single process around 256 to 512 in flight.
+
+**Rule out the mock.** It's Python too, so it could have been the thing that broke. k6
+against the same server, same 1.4 s latency: **400 rps sustained at 611 concurrent, p50
+1,354 ms** (`results/real/local/k6-mock-611-concurrent.json`). The mock holds 611
+concurrent without blinking. Our client managed 67 rps at 512 against it.
+
+**So the ceiling is per process.** Same total concurrency of 512, same backend, same
+machine, only the number of processes changes
+(`results/real/local/multiprocess-experiment.json`):
+
+| | Throughput | p50 | p99 |
+|---|---|---|---|
+| 1 process at c=512 | 67 rps | 6,008 ms | 13,206 ms |
+| **4 processes at c=128 each** | **307 rps** | **1,380 ms** | ~2,850 ms |
+
+**4.6x the throughput and 4.4x better p50 from the same 512 concurrent requests.** Each
+process turned in 74 to 78 rps, which is the single-process c=128 figure repeated four
+times. It scales linearly because nothing is shared.
+
+So the constraint is one Python process's event loop, and it has two parts. TLS crypto is
+CPU work on that loop and costs about half the usable concurrency. Underneath that, the
+loop itself runs out of dispatch capacity somewhere past 256 in flight, TLS or not. Both
+are per process, and Python runs one thread of bytecode at a time, so neither is fixed by
+threads or bigger connection pools. The pool experiment already showed that: it sat at
+50% while throughput collapsed.
+
+The number to plan with is **roughly 74 rps per process against Vertex**. Want 550? That's
+about 8 processes, and the earlier worker test agrees. Vertex has already shown it will
+take that and more from a single machine.
+
+That also settles the adaptive limiter. It hunts for a quota wall, keyed on latency, and
+across four runs and roughly 97,000 requests Vertex has never once rejected anything. The
+controller solves a problem I now have direct evidence doesn't exist on this workload. It
+stays off, and if throughput is ever the issue the answer is more processes, not a
+cleverer client.
 
 ---
 
@@ -1188,6 +1312,10 @@ project was live, because those numbers don't transfer between endpoints.
 | Tool attached does not cause refusals | measured | `measurement/tool-refusal-*` |
 | HTTP/2 | measured | `capacity/vertex-http2-*` |
 | Adaptive limiter | validated | `local/adaptive-experiment.txt` |
+| Vertex takes 550 rps, 0 rejections | measured | `capacity/k6-vertex-ceiling.json` |
+| Rig itself does 4,000 rps | validated | `local/k6-rig-calibration.json` |
+| TLS halves per-process concurrency | validated | `local/notls-sweep-manifest.json` |
+| Ceiling is per process, not per host | validated | `local/multiprocess-experiment.json` |
 | Pricing rates | verified | Cloud Billing Catalog API, `scripts/verify_pricing.py` |
 | Annual cost projections | modelled | measured unit cost x stated cadence, section 5 |
 

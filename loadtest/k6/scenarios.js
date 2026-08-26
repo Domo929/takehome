@@ -91,6 +91,36 @@ const ALL = {
     maxVUs: MAX_VUS,
   },
 
+  // Hunt for the vendor's ceiling. The other scenarios top out around 80 rps, which
+  // is below anything Vertex has ever pushed back on, so they can only ever report
+  // the load offered rather than the load survived.
+  //
+  // This exists because our Python client cannot generate enough concurrency to find
+  // the wall: one event loop saturates its TLS path around 128 in flight, so it tops
+  // out near 74 rps against a 1.4s backend. k6 is Go and has no such limit, which is
+  // the entire reason a direct-to-vendor control arm is worth having.
+  //
+  // Costs real money and climbs fast. Output tokens dominate the bill, so run it with
+  // a small GEMINI_MAX_OUTPUT_TOKENS: the question is how many requests per second
+  // Vertex accepts, not how long the answers are.
+  ceiling: {
+    executor: 'ramping-arrival-rate',
+    startRate: 50,
+    timeUnit: '1s',
+    // Sized for the top stage: ~550 rps at roughly 1s each needs ~550 concurrent
+    // slots. Under-allocating shows up as dropped_iterations, which would mean the
+    // generator quit before Vertex did.
+    preAllocatedVUs: 700,
+    maxVUs: Number(__ENV.MAX_VUS || 2000),
+    stages: [
+      { target: 50, duration: '15s' },
+      { target: 150, duration: '20s' },
+      { target: 300, duration: '20s' },
+      { target: 550, duration: '20s' },
+      { target: 550, duration: '20s' },
+    ],
+  },
+
   // Rig calibration, not a Gemini test. Ramps hard against a zero-latency mock to
   // find the ceiling of the *test rig itself* (mock server, loopback, k6). Any real
   // experiment must run far below whatever knee this finds, otherwise the harness is
@@ -119,7 +149,22 @@ export const scenarios = { [SCENARIO]: ALL[SCENARIO] };
 
 // Thresholds are assertions, not decoration: a run that breaches them exits non-zero
 // so a regression fails loudly instead of being buried in a dashboard.
-export const thresholds = {
+const CEILING_THRESHOLDS = {
+  // The point of the run is to find the wall, so hitting it is a result, not a
+  // failure. Aborting on it is cost control: once Vertex starts refusing there is
+  // nothing left to learn by paying for more refusals.
+  gemini_rate_limited: [
+    { threshold: 'count<250', abortOnFail: true, delayAbortEval: '15s' },
+  ],
+  // If the generator runs dry, every throughput number below is an understatement
+  // of what Vertex would have taken. That invalidates the run, so stop early.
+  dropped_iterations: [
+    { threshold: 'count<500', abortOnFail: true, delayAbortEval: '15s' },
+  ],
+  'http_req_duration{name:generateContent}': ['p(99) < 120000'],
+};
+
+export const thresholds = SCENARIO === 'ceiling' ? CEILING_THRESHOLDS : {
   // dropped_iterations means k6 could not keep up. If this trips, the generator is
   // the bottleneck and every other number in the run is suspect.
   dropped_iterations: ['count < 1'],
