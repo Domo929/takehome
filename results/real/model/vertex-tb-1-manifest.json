@@ -1,0 +1,61 @@
+{
+  "label": "vertex-tb-1",
+  "mode": "closed",
+  "provider": {
+    "provider": "gemini",
+    "backend": "vertex",
+    "model": "gemini-2.5-flash",
+    "location": "global",
+    "max_output_tokens": 1024,
+    "thinking_budget": -1,
+    "max_connections": 256,
+    "parallelism": 102,
+    "max_attempts": 4,
+    "attempt_timeout_s": 60.0,
+    "total_deadline_s": 180.0
+  },
+  "corpus": {
+    "size": 200,
+    "fingerprint": "a09f8bd0739f197f",
+    "mean_input_chars": 53.6,
+    "complex_fraction": 0.0
+  },
+  "estimate_usd": 0.007707,
+  "started_at": 1787599475.861877,
+  "stages": [
+    {
+      "label": "vertex-tb-1-c3",
+      "mode": "closed",
+      "concurrency": 3,
+      "arrival_rate": 0.0,
+      "duration_s": 21.344,
+      "requests": 15,
+      "successful": 15,
+      "error_rate": 0.0,
+      "throughput_rps": 0.703,
+      "output_tokens_per_s": 323.7,
+      "latency_ms": {
+        "p50": 3339.2,
+        "p90": 5836.8,
+        "p95": 5836.8,
+        "p99": 5991.2,
+        "max": 5991.2,
+        "mean": 3557.0
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 0,
+      "cost_usd": 0.017431,
+      "tokens": {
+        "input": 529,
+        "output": 6909,
+        "thinking": 5528
+      },
+      "errors_by_class": {},
+      "finish_reasons": {
+        "STOP": 15
+      }
+    }
+  ],
+  "actual_usd": 0.017431,
+  "finished_at": 1787599497.2062936
+}

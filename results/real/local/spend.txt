@@ -1,0 +1,38 @@
+
+Tracked runs (from manifests, actual usage_metadata)
+
+  run                backend    location          req    in tok   out tok        cost
+  real-tb-1          developer  developer-api      15       559     7,997    0.020160
+  real-tb0           developer  developer-api      15       559     1,195    0.003155
+  uscentral-tb-1     vertex     us-central1        15       529     6,875    0.017346
+  uscentral-tb0      vertex     us-central1        15       529     1,666    0.004324
+  vertex-extreme     vertex     us-central1      4502   215,445 1,029,671    2.638811
+  vertex-http2       vertex     us-central1      4293   182,260   872,744    2.236538
+  vertex-knee        vertex     us-central1     15240   657,701 3,153,860    8.081960
+  vertex-soak-long   vertex     us-central1     47677 1,627,960 7,821,341   20.041741
+  vertex-soak        vertex     us-central1     19223   656,398 3,136,797    8.038912
+  vertex-sweep       vertex     us-central1       240     8,388    31,589    0.081489
+  vertex-sweep2      vertex     us-central1       390    13,356    59,841    0.153609
+  vertex-tb-1        vertex     global             15       529     6,909    0.017431
+  vertex-tb0         vertex     global             15       529     1,633    0.004241
+
+Untracked probes (declared, not from manifests)
+
+  what                                     backend       req    est cost
+  access check (check_vertex.sh) x2        vertex          2    0.000040
+  preflight single request                 vertex          1    0.000433
+  preflight + spelling probes              developer      14    0.004200
+  rate-limit probe (230 tiny requests)     developer     230    0.003680
+  logprobs support probe                   vertex          2    0.000140
+  logprobs token-cost A/B (10 on, 10 off)  vertex         20    0.000256
+  logprobs 100-sample experiment           vertex        100    0.001460
+
+Total by account
+
+  account                        runs   requests   total cost
+  Evertune (vertex)                11     91,750      41.3187
+  Personal (developer API)          2        274       0.0312
+
+  Spent on Evertune's project: $41.3187 across 91,750 requests
+  (untracked probes are estimated; everything else is reported usage.)
+

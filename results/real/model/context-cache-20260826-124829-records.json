@@ -1,0 +1,326 @@
+{
+  "above_floor": [
+    {
+      "arm": "above_floor",
+      "i": 0,
+      "input_tokens": 2933,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 1977.4
+    },
+    {
+      "arm": "above_floor",
+      "i": 1,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 3584.1
+    },
+    {
+      "arm": "above_floor",
+      "i": 2,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 3632.4
+    },
+    {
+      "arm": "above_floor",
+      "i": 3,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 763.7
+    },
+    {
+      "arm": "above_floor",
+      "i": 4,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 878.0
+    },
+    {
+      "arm": "above_floor",
+      "i": 5,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 817.2
+    },
+    {
+      "arm": "above_floor",
+      "i": 6,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 7145.3
+    },
+    {
+      "arm": "above_floor",
+      "i": 7,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 2498.3
+    },
+    {
+      "arm": "above_floor",
+      "i": 8,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 3392.8
+    },
+    {
+      "arm": "above_floor",
+      "i": 9,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 827.5
+    },
+    {
+      "arm": "above_floor",
+      "i": 10,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 3563.2
+    },
+    {
+      "arm": "above_floor",
+      "i": 11,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 9690.1
+    },
+    {
+      "arm": "above_floor",
+      "i": 12,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 4079.7
+    },
+    {
+      "arm": "above_floor",
+      "i": 13,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 6980.1
+    },
+    {
+      "arm": "above_floor",
+      "i": 14,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 809.0
+    },
+    {
+      "arm": "above_floor",
+      "i": 15,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 768.8
+    },
+    {
+      "arm": "above_floor",
+      "i": 16,
+      "input_tokens": 2933,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 1086.9
+    },
+    {
+      "arm": "above_floor",
+      "i": 17,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 4438.6
+    },
+    {
+      "arm": "above_floor",
+      "i": 18,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 792.5
+    },
+    {
+      "arm": "above_floor",
+      "i": 19,
+      "input_tokens": 2933,
+      "cached_tokens": 2038,
+      "output_tokens": 64,
+      "latency_ms": 4005.6
+    }
+  ],
+  "below_floor": [
+    {
+      "arm": "below_floor",
+      "i": 0,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 32968.7
+    },
+    {
+      "arm": "below_floor",
+      "i": 1,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 819.7
+    },
+    {
+      "arm": "below_floor",
+      "i": 2,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 783.6
+    },
+    {
+      "arm": "below_floor",
+      "i": 3,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 873.3
+    },
+    {
+      "arm": "below_floor",
+      "i": 4,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 1082.3
+    },
+    {
+      "arm": "below_floor",
+      "i": 5,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 1041.8
+    },
+    {
+      "arm": "below_floor",
+      "i": 6,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 16876.3
+    },
+    {
+      "arm": "below_floor",
+      "i": 7,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 748.7
+    },
+    {
+      "arm": "below_floor",
+      "i": 8,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 4366.6
+    },
+    {
+      "arm": "below_floor",
+      "i": 9,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 2970.7
+    },
+    {
+      "arm": "below_floor",
+      "i": 10,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 3992.1
+    },
+    {
+      "arm": "below_floor",
+      "i": 11,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 871.1
+    },
+    {
+      "arm": "below_floor",
+      "i": 12,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 853.0
+    },
+    {
+      "arm": "below_floor",
+      "i": 13,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 7741.9
+    },
+    {
+      "arm": "below_floor",
+      "i": 14,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 1046.5
+    },
+    {
+      "arm": "below_floor",
+      "i": 15,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 824.1
+    },
+    {
+      "arm": "below_floor",
+      "i": 16,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 1154.7
+    },
+    {
+      "arm": "below_floor",
+      "i": 17,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 2254.2
+    },
+    {
+      "arm": "below_floor",
+      "i": 18,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 863.1
+    },
+    {
+      "arm": "below_floor",
+      "i": 19,
+      "input_tokens": 621,
+      "cached_tokens": 0,
+      "output_tokens": 64,
+      "latency_ms": 4417.9
+    }
+  ]
+}

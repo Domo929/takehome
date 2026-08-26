@@ -1,0 +1,24 @@
+
+Per-request cost
+  configuration                             $/request   vs naive
+  naive: interactive, dynamic thinking     0.00115634       1.0x
+  thinking off                             0.00028834       4.0x
+  thinking off + caching                   0.00028159       4.1x
+  thinking off + batch                     0.00014417       8.0x
+  thinking off + batch + caching           0.00014117       8.2x
+
+50,000 prompts/day
+  configuration                               $/day       $/year     saved/yr
+  naive: interactive, dynamic thinking        57.82       21,103            0
+  thinking off                                14.42        5,262       15,841
+  thinking off + caching                      14.08        5,139       15,964
+  thinking off + batch                         7.21        2,631       18,472
+  thinking off + batch + caching               7.06        2,576       18,527
+
+Notes
+  - Token counts are measured from live runs, not estimated.
+  - Batch trades up to 24h turnaround for ~50% off. A daily sweep can absorb that.
+  - Cache and batch discounts do not stack; the larger applies to cached tokens.
+  - Output dominates: it is ~7x the input rate and, with thinking on, ~14x the volume.
+  - Throughput is not a constraint at these volumes. A 50,000-prompt day
+    completes in under 4 minutes at the measured service capacity.

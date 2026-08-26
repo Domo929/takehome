@@ -1,0 +1,61 @@
+{
+  "label": "real-tb0",
+  "mode": "closed",
+  "provider": {
+    "provider": "gemini",
+    "backend": "developer",
+    "model": "gemini-2.5-flash",
+    "location": "developer-api",
+    "max_output_tokens": 1024,
+    "thinking_budget": 0,
+    "max_connections": 256,
+    "parallelism": 102,
+    "max_attempts": 4,
+    "attempt_timeout_s": 60.0,
+    "total_deadline_s": 180.0
+  },
+  "corpus": {
+    "size": 200,
+    "fingerprint": "a09f8bd0739f197f",
+    "mean_input_chars": 53.6,
+    "complex_fraction": 0.0
+  },
+  "estimate_usd": 0.007707,
+  "started_at": 1787586833.6099997,
+  "stages": [
+    {
+      "label": "real-tb0-c3",
+      "mode": "closed",
+      "concurrency": 3,
+      "arrival_rate": 0.0,
+      "duration_s": 5.226,
+      "requests": 15,
+      "successful": 15,
+      "error_rate": 0.0,
+      "throughput_rps": 2.87,
+      "output_tokens_per_s": 228.7,
+      "latency_ms": {
+        "p50": 976.5,
+        "p90": 1373.9,
+        "p95": 1373.9,
+        "p99": 1506.8,
+        "max": 1506.8,
+        "mean": 951.8
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 0,
+      "cost_usd": 0.003155,
+      "tokens": {
+        "input": 559,
+        "output": 1195,
+        "thinking": 0
+      },
+      "errors_by_class": {},
+      "finish_reasons": {
+        "STOP": 15
+      }
+    }
+  ],
+  "actual_usd": 0.003155,
+  "finished_at": 1787586838.836369
+}

@@ -1,0 +1,47 @@
+{
+  "experiment": "single-process-vs-multi-process",
+  "question": "is the client ceiling per-process, and does adding processes recover it?",
+  "backend": "mock/fake_vertex.py tuned to Vertex's latency profile, plain HTTP so TLS is out of the picture",
+  "control_one_process_c512": {
+    "rps": 67.013,
+    "p50_ms": 6007.5,
+    "p99_ms": 13206.2
+  },
+  "treatment_four_processes_c128_each": [
+    {
+      "label": "proc1",
+      "concurrency": 128,
+      "rps": 76.77,
+      "p50": 1383.7,
+      "p99": 2828.6,
+      "requests": 2272
+    },
+    {
+      "label": "proc2",
+      "concurrency": 128,
+      "rps": 78.31,
+      "p50": 1371.4,
+      "p99": 2858.6,
+      "requests": 2294
+    },
+    {
+      "label": "proc3",
+      "concurrency": 128,
+      "rps": 77.191,
+      "p50": 1376.4,
+      "p99": 2804.0,
+      "requests": 2278
+    },
+    {
+      "label": "proc4",
+      "concurrency": 128,
+      "rps": 74.816,
+      "p50": 1403.9,
+      "p99": 2891.1,
+      "requests": 2246
+    }
+  ],
+  "combined_rps": 307.1,
+  "total_concurrency_both_arms": 512,
+  "finding": "same total concurrency, 4.6x the throughput and 4.4x better p50 when it is spread across 4 processes. The ceiling is per event loop, not per machine."
+}

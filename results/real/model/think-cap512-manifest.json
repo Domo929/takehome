@@ -1,0 +1,79 @@
+{
+  "label": "think-cap512",
+  "mode": "closed",
+  "provider": {
+    "provider": "gemini",
+    "backend": "vertex",
+    "model": "gemini-2.5-flash",
+    "location": "us-central1",
+    "max_output_tokens": 512,
+    "thinking_budget": -1,
+    "max_connections": 256,
+    "http2": false,
+    "parallelism": 128,
+    "max_attempts": 4,
+    "attempt_timeout_s": 60.0,
+    "total_deadline_s": 180.0
+  },
+  "corpus": {
+    "size": 200,
+    "fingerprint": "a09f8bd0739f197f",
+    "mean_input_chars": 53.6,
+    "complex_fraction": 0.0
+  },
+  "estimate_usd": 0.050552,
+  "started_at": 1787611945.5899215,
+  "stages": [
+    {
+      "label": "think-cap512-c8",
+      "mode": "closed",
+      "concurrency": 8,
+      "arrival_rate": 0.0,
+      "duration_s": 17.43,
+      "requests": 40,
+      "successful": 23,
+      "error_rate": 0.425,
+      "throughput_rps": 1.32,
+      "output_tokens_per_s": 396.2,
+      "latency_ms": {
+        "p50": 2514.6,
+        "p90": 3782.7,
+        "p95": 3832.8,
+        "p99": 3893.3,
+        "max": 3893.3,
+        "mean": 2642.3
+      },
+      "mean_schedule_lag_ms": 0.0,
+      "retries": 0,
+      "warmup_s": 0.0,
+      "warmup_requests": 0,
+      "cost_usd": 0.039274,
+      "tokens": {
+        "input": 1398,
+        "output": 15542,
+        "thinking": 13387
+      },
+      "errors_by_class": {
+        "": 17
+      },
+      "finish_reasons": {
+        "STOP": 23,
+        "MAX_TOKENS": 17
+      },
+      "windows": [
+        {
+          "window_start_s": 0.0,
+          "requests": 40,
+          "successful": 23,
+          "rps": 0.77,
+          "p50_ms": 2515.0,
+          "p99_ms": 3893.0,
+          "errors_by_class": {},
+          "retries": 0
+        }
+      ]
+    }
+  ],
+  "actual_usd": 0.039274,
+  "finished_at": 1787611963.0209224
+}

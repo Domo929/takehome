@@ -1,0 +1,159 @@
+{
+  "uid": "takehome-cost",
+  "title": "Cost & Burn",
+  "tags": ["takehome", "cost"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Actual spend this run",
+      "description": "Derived from reported usage_metadata, never estimated.",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(llm_spend_usd_total)",
+          "legendFormat": "spent",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Budget remaining",
+      "description": "The run halts when this reaches zero.",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "green", "value": 2 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        { "expr": "llm_budget_remaining_usd", "legendFormat": "remaining", "refId": "A" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Burn rate",
+      "description": "Dollars per hour at the current 1m rate.",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "currencyUSD", "decimals": 2 }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(llm_spend_usd_total[1m])) * 3600",
+          "legendFormat": "$/hour",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Time to budget exhaustion",
+      "description": "Remaining budget divided by current burn rate. The single most useful number when deciding whether to let a run continue.",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 300 },
+              { "color": "green", "value": 1800 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "llm_budget_remaining_usd / clamp_min(sum(rate(llm_spend_usd_total[1m])), 0.0000001)",
+          "legendFormat": "seconds left",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Cumulative spend",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "fieldConfig": {
+        "defaults": { "unit": "currencyUSD", "decimals": 4, "custom": { "fillOpacity": 10 } }
+      },
+      "targets": [
+        {
+          "expr": "sum by (model) (llm_spend_usd_total)",
+          "legendFormat": "{{model}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Token rate by kind",
+      "description": "Thinking tokens bill at the output rate but produce no visible text. A large thinking share means paying for reasoning the user never sees.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } }
+      },
+      "targets": [
+        {
+          "expr": "sum by (kind) (rate(llm_tokens_total[1m]))",
+          "legendFormat": "{{kind}}/s",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Cost per usable answer",
+      "description": "Total spend divided by successful, non-truncated responses. The metric that actually matters for unit economics.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 13 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 6 } },
+      "targets": [
+        {
+          "expr": "sum(rate(llm_spend_usd_total[1m])) / clamp_min(sum(rate(llm_requests_total{outcome=\"success\"}[1m])), 0.001)",
+          "legendFormat": "$ per usable answer",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

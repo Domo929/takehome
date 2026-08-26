@@ -1,0 +1,590 @@
+"""Behavioral tests for the Gemini provider.
+
+These assert on the failure modes that make Gemini different from an OpenAI-shaped
+API. Each test forces one specific condition on the fake server, so failures point at
+a named behavior rather than a flaky end-to-end run.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from llm.errors import LLMContentBlockedError, LLMEmptyResponseError, LLMRateLimitError
+from llm.gemini import Gemini
+from llm.llm import FinishReason
+from llm.retry import RetryBudget, RetryPolicy
+
+SYSTEM = "You are a market research assistant."
+QUESTION = "Which robot vacuum brands are worth considering?"
+
+
+def build(server, **kwargs) -> Gemini:
+    params = dict(
+        backend="vertex",
+        project="fake-project",
+        location="global",
+        base_url=server.base_url,
+        max_output_tokens=1024,
+        thinking_budget=0,
+        max_connections=64,
+    )
+    params.update(kwargs)
+    return Gemini(**params)
+
+
+async def test_happy_path_parses_usage_and_cost(fake_vertex):
+    fake_vertex.configure(
+        empty_probability=0.0, safety_probability=0.0, rate_limit_probability=0.0,
+        server_error_probability=0.0, truncate_probability=0.0,
+    )
+    provider = build(fake_vertex)
+    result = await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+    assert result.is_usable
+    assert result.finish_reason is FinishReason.STOP
+    assert result.answer
+    assert result.input_tokens > 0
+    assert result.output_tokens > 0
+    assert result.cost_usd and result.cost_usd > 0
+    assert result.latency_ms is not None
+    assert result.metadata["traffic_type"] == "ON_DEMAND"
+
+
+async def test_thinking_tokens_are_counted_as_billed_output(fake_vertex):
+    """Thinking bills at the output rate, so it must be inside output_tokens.
+
+    Reporting only candidates_token_count is the accounting bug that makes a run look
+    cheaper than the invoice.
+    """
+    fake_vertex.configure(
+        empty_probability=0.0, safety_probability=0.0, truncate_probability=0.0,
+        rate_limit_probability=0.0, server_error_probability=0.0,
+    )
+    provider = build(fake_vertex, thinking_budget=256, max_output_tokens=4096)
+    result = await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+    assert result.thinking_tokens > 0
+    assert result.output_tokens > result.thinking_tokens
+    assert result.visible_output_tokens == result.output_tokens - result.thinking_tokens
+
+    from llm.pricing import cost_usd
+    expected = cost_usd("gemini-2.5-flash", result.input_tokens, result.output_tokens)
+    assert result.cost_usd == pytest.approx(expected)
+
+
+async def test_thinking_budget_at_cap_starves_the_answer(fake_vertex):
+    """The headline quirk.
+
+    thinking_budget and max_output_tokens draw on one allowance. Setting the budget at
+    or above the cap leaves nothing for visible text: HTTP 200, finish_reason
+    MAX_TOKENS, no answer, and the thinking tokens are billed in full.
+    """
+    fake_vertex.configure(
+        empty_probability=0.0, safety_probability=0.0, truncate_probability=0.0,
+        rate_limit_probability=0.0, server_error_probability=0.0,
+    )
+    provider = build(
+        fake_vertex, thinking_budget=512, max_output_tokens=512,
+        retry_policy=RetryPolicy(max_attempts=1, attempt_timeout_s=10, total_deadline_s=20),
+    )
+
+    with pytest.raises(LLMEmptyResponseError):
+        await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+
+async def test_safety_block_is_terminal_not_retried(fake_vertex):
+    """Retrying a safety block just re-triggers it and bills again."""
+    fake_vertex.configure(safety_probability=1.0, empty_probability=0.0)
+    budget = RetryBudget(capacity=100.0)
+    provider = build(
+        fake_vertex,
+        retry_policy=RetryPolicy(
+            max_attempts=4, attempt_timeout_s=10, total_deadline_s=20, budget=budget
+        ),
+    )
+
+    with pytest.raises(LLMContentBlockedError):
+        await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+    # A terminal error must not consume retry budget.
+    assert budget.tokens == pytest.approx(100.0)
+    fake_vertex.configure(safety_probability=0.0)
+
+
+async def test_empty_response_is_retried_and_can_recover(fake_vertex):
+    """An empty 200 is invisible to transport retry; only validation catches it."""
+    fake_vertex.configure(empty_probability=1.0, safety_probability=0.0)
+    provider = build(
+        fake_vertex,
+        retry_policy=RetryPolicy(
+            max_attempts=3, base_delay_s=0.01, attempt_timeout_s=10, total_deadline_s=20
+        ),
+    )
+
+    with pytest.raises(LLMEmptyResponseError):
+        await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+    fake_vertex.configure(empty_probability=0.0)
+    result = await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+    assert result.is_usable
+
+
+async def test_rate_limit_surfaces_as_retryable_with_retry_after(fake_vertex):
+    fake_vertex.configure(rate_limit_probability=1.0, retry_after_s=0.05)
+    provider = build(
+        fake_vertex,
+        retry_policy=RetryPolicy(
+            max_attempts=2, base_delay_s=0.01, attempt_timeout_s=10, total_deadline_s=20
+        ),
+    )
+
+    with pytest.raises(LLMRateLimitError) as excinfo:
+        await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+    assert excinfo.value.retryable
+    assert excinfo.value.status_code == 429
+    assert excinfo.value.retry_after_s == pytest.approx(0.05, abs=0.02)
+    fake_vertex.configure(rate_limit_probability=0.0)
+
+
+async def test_retry_budget_sheds_load_when_exhausted(fake_vertex):
+    """A drained budget must stop retrying rather than amplify traffic."""
+    fake_vertex.configure(rate_limit_probability=1.0, retry_after_s=0.01)
+    budget = RetryBudget(capacity=2.0, refill_per_attempt=0.0)
+    provider = build(
+        fake_vertex,
+        retry_policy=RetryPolicy(
+            max_attempts=10, base_delay_s=0.001, max_delay_s=0.01,
+            attempt_timeout_s=5, total_deadline_s=15, budget=budget,
+        ),
+    )
+
+    with pytest.raises(LLMRateLimitError):
+        await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+    assert budget.tokens < 1.0
+    fake_vertex.configure(rate_limit_probability=0.0)
+
+
+async def test_parallelism_reflects_the_validated_operating_point(fake_vertex):
+    """parallelism() reflects the highest concurrency measured, capped by the pool.
+
+    Throughput scaled linearly from 8 to 128 concurrent with no knee, so 128 is the
+    top of the measured range rather than a ceiling. The pool cap matters because a
+    limit above the pool queues on sockets instead of at the admission gate, which is
+    exactly the invisible queueing this instrumentation exists to catch.
+    """
+    provider = build(fake_vertex, max_connections=256)
+    assert provider.parallelism() == 128
+    assert provider.parallelism() <= provider.max_connections // 2
+
+    # With a small pool the pool wins, since it is the tighter real constraint.
+    tight = build(fake_vertex, max_connections=40)
+    assert tight.parallelism() == 20
+
+
+async def test_concurrent_requests_do_not_exceed_pool(fake_vertex):
+    import asyncio
+
+    fake_vertex.reset()
+    fake_vertex.configure(
+        rate_limit_probability=0.0, empty_probability=0.0, safety_probability=0.0,
+        saturation_concurrency=10_000,
+    )
+    provider = build(fake_vertex, max_connections=16)
+
+    results = await asyncio.gather(
+        *(provider.ask_generic_question(SYSTEM, QUESTION, 0.7) for _ in range(24))
+    )
+    assert all(r.is_usable for r in results)
+
+    # The server observed real concurrency, confirming requests were not serialized.
+    assert fake_vertex.stats()["peak_inflight"] > 1
+
+
+async def test_sdk_serializes_thinking_budget_in_snake_case(fake_vertex):
+    """Pins an SDK serialization quirk that is easy to get silently wrong.
+
+    Inside ``generationConfig`` every field is camelCase except ``thinkingConfig``'s
+    budget, which the SDK emits as ``thinking_budget``. Anything sitting between the
+    client and Vertex (a gateway, a proxy, a recording mock) that matches on
+    ``thinkingBudget`` will quietly drop the setting. The model then thinks without a
+    bound, and the symptom is truncated answers plus unexplained cost rather than an
+    error. If a future SDK release normalizes this, this test should fail loudly.
+    """
+    import json
+
+    import httpx
+
+    captured: dict = {}
+    original = httpx.AsyncClient.request
+
+    async def spy(self, method, url, **kwargs):
+        body = kwargs.get("content")
+        if body:
+            try:
+                captured["body"] = json.loads(body)
+            except (TypeError, ValueError):
+                pass
+        return await original(self, method, url, **kwargs)
+
+    httpx.AsyncClient.request = spy
+    try:
+        provider = build(fake_vertex, thinking_budget=128, max_output_tokens=4096)
+        await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+    finally:
+        httpx.AsyncClient.request = original
+
+    generation_config = captured["body"]["generationConfig"]
+    assert "maxOutputTokens" in generation_config, "sibling fields are camelCase"
+    thinking_config = generation_config["thinkingConfig"]
+    assert thinking_config.get("thinking_budget") == 128, (
+        "SDK emitted the budget under an unexpected key; "
+        f"got keys {sorted(thinking_config)}"
+    )
+
+
+async def test_base_contract_stays_backward_compatible(fake_vertex):
+    """The contract was extended for grounding. It must not have been broken.
+
+    `llm/llm.py` was byte-identical to upstream until grounding forced the question.
+    Evertune's product compares brand visibility *across* models, and the measurement
+    axis is live search on versus off, so the grounded path has to be polymorphic --
+    expressible on the abstraction rather than only on the Gemini subclass. That is
+    the justification for touching a provided file, and it is deliberately narrow.
+
+    What this test pins is that the extension is additive and nothing that worked
+    before stopped working: the original three fields keep their names, order and
+    types; the original call signature still works positionally; and every new
+    parameter is keyword-only with a default that preserves the old behaviour.
+    """
+    import dataclasses
+    import inspect
+
+    from llm.llm import LLM
+
+    fields = [f.name for f in dataclasses.fields(LLM.SimpleResponse)]
+    assert fields[:3] == ["answer", "input_tokens", "output_tokens"], (
+        "the original fields must keep their names and order; positional "
+        "construction by existing callers depends on it"
+    )
+    types_by_name = {f.name: f.type for f in dataclasses.fields(LLM.SimpleResponse)}
+    assert types_by_name["answer"] in (str, "str")
+
+    # Everything added must default, or existing positional construction breaks.
+    for f in dataclasses.fields(LLM.SimpleResponse)[3:]:
+        has_default = (
+            f.default is not dataclasses.MISSING
+            or f.default_factory is not dataclasses.MISSING
+        )
+        assert has_default, f"added field {f.name!r} has no default"
+
+    assert LLM.SimpleResponse("hi", 1, 2) == LLM.SimpleResponse(
+        answer="hi", input_tokens=1, output_tokens=2, grounded=False,
+        grounding_sources=[],
+    )
+
+    # The added request parameter must be keyword-only, so a caller passing the three
+    # original arguments positionally is unaffected.
+    sig = inspect.signature(LLM.ask_generic_question)
+    params = list(sig.parameters.values())
+    assert [p.name for p in params[:4]] == [
+        "self", "system_prompt", "question", "temperature",
+    ]
+    grounded = sig.parameters["grounded"]
+    assert grounded.kind is inspect.Parameter.KEYWORD_ONLY
+    assert grounded.default is False, "grounding costs ~88x; it must be opt-in"
+
+    # A provider that cannot ground must say so rather than silently degrade.
+    assert LLM().supports_grounding() is False
+
+    fake_vertex.configure(
+        empty_probability=0.0, safety_probability=0.0, rate_limit_probability=0.0,
+        server_error_probability=0.0, truncate_probability=0.0,
+    )
+    provider = build(fake_vertex)
+    result = await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+    assert isinstance(result, LLM.SimpleResponse)
+    assert isinstance(result.answer, str) and result.answer
+    assert provider.supports_grounding() is True
+
+    # A caller that knows only the base contract must work unchanged.
+    def legacy_consumer(response: LLM.SimpleResponse) -> int:
+        return response.input_tokens + response.output_tokens
+
+    assert legacy_consumer(result) > 0
+
+
+async def test_output_tokens_stay_correct_for_base_contract_callers(fake_vertex):
+    """A caller reading only ``output_tokens`` still sees the full billed amount.
+
+    Thinking tokens are surfaced separately for callers that want the split, but the
+    inherited field remains the total billed output so cost computed from the base
+    contract alone is right rather than an undercount.
+    """
+    fake_vertex.configure(
+        empty_probability=0.0, safety_probability=0.0, truncate_probability=0.0,
+        rate_limit_probability=0.0, server_error_probability=0.0,
+    )
+    provider = build(fake_vertex, thinking_budget=256, max_output_tokens=4096)
+    result = await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+    assert result.thinking_tokens > 0
+    assert result.output_tokens == result.visible_output_tokens + result.thinking_tokens
+
+    from llm.pricing import cost_usd
+    base_only_cost = cost_usd("gemini-2.5-flash", result.input_tokens, result.output_tokens)
+    assert result.cost_usd == pytest.approx(base_only_cost)
+
+
+async def test_retried_request_attributes_time_correctly(fake_vertex):
+    """Retry time must not be misattributed as our own overhead.
+
+    ``latency_ms`` reports only the final attempt. A request that was retried also
+    spent time on the failed attempts and on deliberate backoff sleep. If a caller
+    computes "our overhead" as ``total - latency_ms``, all of that lands on us, and a
+    path whose real cost is a fraction of a millisecond reports p99 overhead in
+    seconds. ``upstream_total_ms`` and ``retry_backoff_ms`` exist so the three costs
+    can be separated.
+    """
+    import time
+
+    fake_vertex.configure(server_error_probability=1.0, empty_probability=0.0)
+    provider = build(
+        fake_vertex,
+        retry_policy=RetryPolicy(
+            max_attempts=3, base_delay_s=0.05, max_delay_s=0.2,
+            attempt_timeout_s=10, total_deadline_s=30,
+        ),
+    )
+
+    # Fail twice, then succeed, so the result carries a real retry history.
+    from llm.errors import LLMServerError
+    with pytest.raises(LLMServerError):
+        await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+    fake_vertex.configure(server_error_probability=0.0)
+    started = time.perf_counter()
+    result = await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+    total_ms = (time.perf_counter() - started) * 1000.0
+
+    assert result.is_usable
+    assert result.upstream_total_ms is not None
+    assert result.upstream_total_ms >= (result.latency_ms or 0.0)
+    assert result.retry_backoff_ms >= 0.0
+
+    # The decomposition must not claim more time than actually elapsed.
+    accounted = result.upstream_total_ms + result.retry_backoff_ms
+    assert accounted <= total_ms + 5.0, (
+        f"accounted {accounted:.1f}ms exceeds elapsed {total_ms:.1f}ms"
+    )
+
+    # And what is left over for us must be small: this path does almost nothing.
+    ours = total_ms - accounted
+    assert ours < 100.0, f"unattributed time {ours:.1f}ms is implausibly large"
+
+
+def test_cached_input_tokens_are_discounted_not_double_charged():
+    """Cache hits bill at a fraction of the input rate.
+
+    Implicit caching is on by default for Gemini 2.5, so a workload with a repeated
+    system prompt can be getting this discount without anyone enabling it. Charging
+    every prompt token at full rate overstates spend, which is the mirror image of
+    the thinking-token bug that understates it.
+    """
+    from llm.pricing import cost_usd, pricing_for
+
+    pricing = pricing_for("gemini-2.5-flash")
+    full = cost_usd("gemini-2.5-flash", input_tokens=1000, output_tokens=0)
+    all_cached = cost_usd(
+        "gemini-2.5-flash", input_tokens=1000, output_tokens=0, cached_tokens=1000
+    )
+    assert all_cached == pytest.approx(full * pricing.cached_input_multiplier)
+
+    half = cost_usd(
+        "gemini-2.5-flash", input_tokens=1000, output_tokens=0, cached_tokens=500
+    )
+    assert full > half > all_cached
+
+    # Cached can never exceed prompt tokens, and must not produce a negative charge.
+    absurd = cost_usd(
+        "gemini-2.5-flash", input_tokens=100, output_tokens=0, cached_tokens=99999
+    )
+    assert absurd > 0
+
+
+async def test_failures_are_logged_with_diagnostic_metadata(fake_vertex):
+    """A failure must carry enough context to diagnose without a repro.
+
+    Successful requests are deliberately not logged, because at 100k requests/day that is
+    noise, and Prometheus already answers "how many" and "how fast". Failures are
+    rare enough that a fat record is cheap.
+    """
+    import structlog
+
+    fake_vertex.configure(rate_limit_probability=1.0, retry_after_s=0.01)
+    provider = build(
+        fake_vertex,
+        retry_policy=RetryPolicy(
+            max_attempts=2, base_delay_s=0.01, attempt_timeout_s=5, total_deadline_s=10
+        ),
+    )
+
+    with structlog.testing.capture_logs() as logs:
+        with pytest.raises(LLMRateLimitError):
+            await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+    terminal = [r for r in logs if r.get("event") == "request failed after retries"]
+    assert terminal, "terminal failure was not logged"
+    record = terminal[0]
+    assert record["error_class"] == "LLMRateLimitError"
+    assert record["status_code"] == 429
+    assert record["attempts"] >= 1
+    assert record["model"] and record["location"]
+
+    retries = [r for r in logs if r.get("event") == "retrying"]
+    assert retries, "retry was not logged"
+    # A retried request has not failed yet, so it must not be logged as an error.
+    assert retries[0]["log_level"] == "warning"
+
+
+async def test_successful_requests_are_not_logged(fake_vertex):
+    """Log volume must not scale with successful traffic."""
+    import structlog
+
+    fake_vertex.configure(
+        rate_limit_probability=0.0, empty_probability=0.0, safety_probability=0.0,
+        server_error_probability=0.0, truncate_probability=0.0,
+    )
+    provider = build(fake_vertex)
+
+    with structlog.testing.capture_logs() as logs:
+        for _ in range(5):
+            result = await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+            assert result.is_usable
+
+    assert not logs, f"5 successes produced {len(logs)} log lines"
+
+
+async def test_unusable_response_is_logged_as_billed_waste(fake_vertex):
+    """HTTP 200 with no text is the quietest failure mode, so it gets logged."""
+    import structlog
+
+    fake_vertex.configure(safety_probability=1.0, empty_probability=0.0)
+    provider = build(
+        fake_vertex,
+        retry_policy=RetryPolicy(max_attempts=1, attempt_timeout_s=5, total_deadline_s=10),
+    )
+
+    with structlog.testing.capture_logs() as logs:
+        with pytest.raises(LLMContentBlockedError):
+            await provider.ask_generic_question(SYSTEM, QUESTION, 0.7)
+
+    unusable = [r for r in logs if r.get("event") == "unusable response"]
+    assert unusable, "unusable response was not logged"
+    assert unusable[0]["finish_reason"] == "SAFETY"
+    # The point of the record: tokens were billed for an answer we cannot use.
+    assert unusable[0]["billed_but_unusable"] is True
+
+
+def test_499_is_terminal_by_default_and_retryable_only_on_request(monkeypatch):
+    """499 follows the vendor: terminal.
+
+    An earlier version of this file asserted the opposite, on the reasoning that
+    upstream had shed the connection. Google's error table says 499 is "Request is
+    cancelled by the client", their retry guidance covers only 408, 429 and 5xx, and
+    google-api-core's transient-error predicate excludes CANCELLED. I never observed
+    one, so the claim rested on reasoning rather than evidence and the reasoning was
+    against the documented contract.
+
+    The escape hatch stays because the empirical picture is not settled: there is an
+    open issue arguing 499 should be retryable, and users report transient 499s with
+    no client-side cancellation. Whoever sees them in production can flip it, and
+    they will be departing from the vendor's guidance on purpose rather than by
+    accident.
+    """
+    from google.genai import errors as genai_errors
+
+    provider = Gemini(backend="developer", api_key="k")
+    cancelled = genai_errors.APIError(499, {"message": "The operation was cancelled."})
+
+    monkeypatch.delenv("GEMINI_RETRY_499", raising=False)
+    translated = provider._translate(cancelled)
+    assert not translated.retryable, "499 is documented as client cancellation"
+    assert translated.status_code == 499
+
+    monkeypatch.setenv("GEMINI_RETRY_499", "1")
+    assert provider._translate(cancelled).retryable
+
+
+def test_an_unrecognised_exception_is_not_blamed_on_the_vendor():
+    """Our bugs must not be retried four times and filed as vendor unreliability.
+
+    The catch-all used to return LLMServerError, so a TypeError or an SDK response
+    shape that changed underneath us would be retried with full backoff and then
+    counted in llm_requests_total{error_class="LLMServerError"} - which is evidence
+    about Google in every capacity number in FINDINGS.
+    """
+    provider = Gemini(backend="developer", api_key="k")
+    for exc in (TypeError("bad kwarg"), KeyError("candidates"), ValueError("decode")):
+        translated = provider._translate(exc)
+        assert not translated.retryable, f"{exc!r} is our bug, not a vendor fault"
+        assert type(translated).__name__ == "LLMInternalError"
+
+
+def test_client_errors_are_not_retried():
+    """The other side of the same coin: a 400 will never succeed on retry."""
+    from google.genai import errors as genai_errors
+
+    provider = Gemini(backend="developer", api_key="k")
+    bad = genai_errors.APIError(400, {"message": "Invalid value at 'generation_config'"})
+
+    assert not provider._translate(bad).retryable
+
+
+def test_thinking_is_off_unless_someone_asks_for_it(monkeypatch):
+    """Vertex defaults thinking on. We default it off, and that has to stay true.
+
+    A request carrying no thinkingConfig comes back with ~212 billed thinking tokens
+    (results/real/model/think-dyn-n100-*). Nothing warns you: the answer looks normal
+    and the cost lands on the invoice weeks later. So the provider's default is the
+    control, and this pins it. If a refactor ever lets the vendor default through,
+    every request on the platform gets quietly more expensive.
+    """
+    monkeypatch.delenv("GEMINI_THINKING_BUDGET", raising=False)
+    provider = Gemini(backend="vertex", project="p", location="global")
+
+    assert provider._thinking_budget == 0
+
+
+def test_thinking_can_be_turned_on_by_configuration(monkeypatch):
+    """Off by default is a decision, not a hardcoding. Grounded runs need it back on."""
+    monkeypatch.setenv("GEMINI_THINKING_BUDGET", "1024")
+    assert Gemini(backend="vertex", project="p", location="global")._thinking_budget == 1024
+
+    # Explicit argument beats the environment, so a caller can override per provider.
+    provider = Gemini(backend="vertex", project="p", location="global", thinking_budget=0)
+    assert provider._thinking_budget == 0
+
+
+def test_temperature_default_is_the_measured_one():
+    """1.0 was measured, not inherited. At 0 the metric stops working.
+
+    The temperature sweep found 0 of 103 brands landing between 10% and 90% mention
+    rate at temperature 0 (results/real/measurement/temperature-multi-*). The measure
+    goes binary: every brand is always named or never named, and a share-of-voice
+    number it cannot express is worse than a noisy one. Three call sites have to agree
+    on this, so it is worth pinning in one place.
+    """
+    import inspect
+
+    from harness.run import main as harness_main  # noqa: F401
+    from service.app import AskRequest
+
+    assert AskRequest.model_fields["temperature"].default == 1.0
+
+    from harness import run as harness_run
+    for fn in (harness_run.run_closed_loop, harness_run.run_open_loop, harness_run._one_request):
+        default = inspect.signature(fn).parameters["temperature"].default
+        assert default == 1.0, f"{fn.__name__} disagrees with the measured default"

@@ -1,0 +1,80 @@
+{
+  "experiment": "review-probes",
+  "started_utc": "2026-08-25T22:55:55Z",
+  "project": "evertune-tests",
+  "location": "us-central1",
+  "model": "gemini-2.5-flash",
+  "requests": 6,
+  "grounded_prompts_billed": 0,
+  "modelled_cost_usd": 0.003637,
+  "probes": [
+    {
+      "probe": "thinking-unset",
+      "ok": true,
+      "latency_ms": 3640.8,
+      "input_tokens": 21,
+      "output_tokens": 85,
+      "thinking_tokens": 212,
+      "finish_reason": "FinishReason.STOP",
+      "function_calls": [],
+      "function_args": [],
+      "grounded": false,
+      "search_queries": [],
+      "text": "Consider:\n\n*   **iRobot (Roomba)**: Market leader, robust cleaning.\n*   **Roborock**: Excellent navigation, strong suction, and mopping features.\n*   **Eufy**: Good value, reliable performance.\n*   **Shark**: Effective on pet hair, often with self-emptying docks.\n*   **Dreametech**: Advanced features and strong performance."
+    },
+    {
+      "probe": "thinking-explicit-0",
+      "ok": true,
+      "latency_ms": 3365.9,
+      "input_tokens": 21,
+      "output_tokens": 260,
+      "thinking_tokens": 0,
+      "finish_reason": "FinishReason.STOP",
+      "function_calls": [],
+      "function_args": [],
+      "grounded": false,
+      "search_queries": [],
+      "text": "**Premium (High-End):**\n\n*   **iRobot Roomba:** Excellent navigation, strong suction, good app features (J7+, S9+).\n*   **Roborock:** Advanced navigation (Lidar), great mopping capabilities, powerful suction (S7 MaxV Ultra, S8 Pro Ultra).\n*   **Ecovacs Deebot:** Good all-in-one solutions with auto-empty and mopping, competitive features (X1 Omni, T20 Omni).\n\n**Mid-Range:**\n\n*   **Shark ION/AI:** S"
+    },
+    {
+      "probe": "thinking-explicit-dynamic",
+      "ok": true,
+      "latency_ms": 6105.3,
+      "input_tokens": 21,
+      "output_tokens": 25,
+      "thinking_tokens": 826,
+      "finish_reason": "FinishReason.STOP",
+      "function_calls": [],
+      "function_args": [],
+      "grounded": false,
+      "search_queries": [],
+      "text": "iRobot (Roomba), Roborock, Ecovacs (Deebot), Eufy, and Shark."
+    },
+    {
+      "probe": "function-tool-only",
+      "ok": true,
+      "latency_ms": 597.5,
+      "input_tokens": 42,
+      "output_tokens": 34,
+      "thinking_tokens": 0,
+      "finish_reason": "FinishReason.STOP",
+      "function_calls": [],
+      "function_args": [],
+      "grounded": false,
+      "search_queries": [],
+      "text": "I can't answer that, as I cannot make specific product recommendations. I can, however, record any brands you are considering, along with your sentiment toward them."
+    },
+    {
+      "probe": "function-tool-plus-search",
+      "ok": false,
+      "error": "ClientError",
+      "detail": "400 INVALID_ARGUMENT. {'error': {'code': 400, 'message': 'Unable to submit request because Multiple tools are supported only when they are all search tools.. Learn more: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/gemini', 'status': 'INVALID_ARGUMENT'}}"
+    },
+    {
+      "probe": "single-tool-both-features",
+      "ok": false,
+      "error": "ClientError",
+      "detail": "400 INVALID_ARGUMENT. {'error': {'code': 400, 'message': 'Unable to submit request because Multiple tools are supported only when they are all search tools.. Learn more: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/gemini', 'status': 'INVALID_ARGUMENT'}}"
+    }
+  ]
+}

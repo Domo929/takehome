@@ -1,2 +1,24 @@
 pytest-asyncio==1.3.0
 together==2.12.0
+
+# --- added for the Gemini on Vertex AI integration ---
+google-genai>=2.19.0
+google-auth>=2.56.0
+httpx>=0.28.0
+# HTTP/2 support, opt-in via GEMINI_HTTP2. See FINDINGS 6h.
+h2>=4.0.0
+
+# instrumentation
+prometheus-client>=0.26.0
+# structlog over a hand-rolled JSON formatter: Sentry/Datadog/OTel all ship
+# processors for it, so error-tracking is a chain entry rather than a rewrite.
+structlog>=25.0.0
+# .env parsing. Hand-rolled first; python-dotenv got export= and quoting right.
+python-dotenv>=1.0.0
+
+# fake Vertex endpoint used for $0 harness validation
+fastapi>=0.141.0
+uvicorn>=0.52.0
+
+# tests
+pytest>=9.0.0
