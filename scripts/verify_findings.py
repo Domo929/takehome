@@ -157,6 +157,20 @@ def main() -> int:
         got = rate["g"].get(brand, 0) - rate["u"].get(brand, 0)
         check(f"{brand} delta", round(got), want, tol=1)
 
+    # Same numbers with product lines resolved to their parent company. Two of the
+    # rows above change and one changes sign, which is the point of that section.
+    resolve = {"roomba": "irobot", "deebot": "ecovacs", "yeedi": "ecovacs", "eufy": "anker"}
+    res = {}
+    for arm, rows_ in (("g", g), ("u", u)):
+        c2: Counter = Counter()
+        for r in rows_:
+            for b in {resolve.get(x, x) for x in brands(r["answer"])}:
+                c2[b] += 1
+        res[arm] = {b: n / len(rows_) * 100 for b, n in c2.items()}
+    for brand, want in (("irobot", -2), ("anker", 34), ("ecovacs", 36)):
+        got = res["g"].get(brand, 0) - res["u"].get(brand, 0)
+        check(f"{brand} delta, resolved", round(got), want, tol=1)
+
     print("\nTemperature sweep, 3,300 requests (section 2)")
     tm = manifest("results/real/measurement/temperature-multi-*-manifest.json")
     check("sweep request count", tm["requests"], 3300)

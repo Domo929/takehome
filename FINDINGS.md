@@ -437,11 +437,45 @@ Every brand whose interval excludes zero, not a selection:
 Three more moved too little to call: Neato -3 [-11, +5], Roomba -2 [-5, +0], Deebot
 +2 [-12, +16]. Reproduce the whole table with `python scripts/confidence.py`.
 
-Dreame shows up in 5% of ungrounded samples and 97% of grounded ones. Anker falls as
-Eufy rises, which tracks, Anker's robot vacuums are sold under the Eufy brand.
+Dreame shows up in 5% of ungrounded samples and 97% of grounded ones.
 
 The ungrounded condition isn't a degraded version of the grounded one. It measures
 something real and separately useful: what the model believes when nobody corrects it.
+
+### Two rows in that table are wrong, and one has the wrong sign
+
+I wrote "Anker falls as Eufy rises, which tracks, Anker's robot vacuums are sold under
+the Eufy brand," and then left both in the table as separate findings. Spotting the
+relationship and not applying it is worse than missing it.
+
+Roomba is iRobot's product line. Deebot and Yeedi are Ecovacs'. Eufy is Anker's. The
+extractor counts each string separately, so the table measures **strings, not companies**.
+Resolving product lines to their parent:
+
+| Entity | Reported delta | After resolution | |
+|---|---|---|---|
+| iRobot | **-15** (significant) | **-2** | not a finding |
+| Anker | **-15** (significant) | **+34** | **sign flips** |
+| Ecovacs | +41 | +36 | holds |
+
+The Anker row is the one to sit with. As reported, Anker loses 15 points when grounding
+is on. As a company it gains 34, because 99% of grounded answers name Eufy. A dashboard
+built on the first number tells Anker their visibility collapsed in exactly the quarter it
+more than doubled.
+
+This isn't an extractor bug, it's a missing step. In the ungrounded arm iRobot and Roomba
+appear together in **100 of 100** answers, so summing them gives a 200% share, which is
+visibly nonsense. Eufy and Anker never separate either: every Anker mention is inside a
+Eufy mention.
+
+Entity resolution is presumably solved somewhere in Evertune's pipeline, since it's core
+to the product. I'm raising it because nothing in the provider contract carries it, and a
+provider-level measurement that skips it produces confidently wrong numbers rather than
+obviously broken ones. Worth confirming which layer owns it.
+
+For this document I've left the table as measured and flagged the two affected rows,
+rather than silently applying a mapping I invented. The mapping itself is a business-data
+question, not an engineering one.
 
 ### You can't compare citations across samples
 
@@ -536,10 +570,39 @@ value is chosen, then version it with the results. A brand time
 series that does not record its temperature is fundamentally two different measurements
 that are not comparable.
 
-**The noise floor is about 5 percentage points**, measured as drift between two
-independent 30-sample halves at the same setting. Any brand movement smaller than that
-isn't a finding. Reporting a 3-point move as a trend is the easiest mistake this product
-can make.
+### How big does a change have to be before it's real?
+
+I first answered this with a single number, and the number was wrong in the direction
+that matters. Splitting each 60-sample cell into independent halves and measuring
+per-brand rate drift gives about **5 points** at temperature 1.0, and I wrote that up as
+the noise floor: anything smaller isn't a finding.
+
+Three things are wrong with using it that way. It's a **mean**, and a threshold needs a
+tail. It was measured at **n=30 per half**, while production samples 100. And it's quoted
+as **one number** when the noise depends on where the brand sits.
+
+Simulating two independent samples of the same brand at the same setting, which is the
+question a "did this move?" alert is really asking:
+
+| True mention rate | n | Mean gap by chance | 95th percentile |
+|---|---|---|---|
+| 10% | 30 | 6.1 pts | 16.7 pts |
+| 10% | **100** | 3.4 pts | **8.0 pts** |
+| 30% | **100** | 5.2 pts | **13.0 pts** |
+| 50% | **100** | 5.6 pts | **14.0 pts** |
+
+So at production sample sizes the honest threshold is **8 points for a niche brand and 14
+for a mid-share one**, not 5. My original figure would have called a 6-point move real.
+For a brand sitting near 50%, one run in three moves further than that with nothing
+changing at all.
+
+The shape of the answer matters more than the number. Noise is largest in the middle of
+the range, which is exactly the band where the metric is informative, so the brands worth
+watching are the ones hardest to call. A single global threshold is the wrong instrument.
+Reporting each rate with its interval costs nothing, since the sample size is already
+known at collection time, and it removes the question entirely.
+
+Reproduce with `python scripts/noise_floor.py`.
 
 ### Is 100 samples the right number?
 
