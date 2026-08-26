@@ -1,15 +1,15 @@
 """Does responseSchema pay for itself, and does it survive grounding?
 
-FINDINGS 8 argued structured output removes a downstream extraction call and turns
+FINDINGS 2 argued structured output removes a downstream extraction call and turns
 truncation from a silent failure into a parse error. Both were arguments rather than
 measurements, and both underpin a recommendation.
 
 Four arms over the same prompts: prose and schema, each ungrounded and grounded. The
-grounded pair is the one that matters, since FINDINGS 0c found grounded answers change
+grounded pair is the one that matters, since FINDINGS 2 found grounded answers change
 shape and break prose extractors quietly. A separate low-cap probe forces truncation in
 both arms to test the detectability claim.
 
-Results in FINDINGS 8.
+Results in FINDINGS 2.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ CATEGORIES = [
 QUESTION = "Which {category} brands are worth considering?"
 
 # The shape a brand-tracking pipeline actually wants. `sentiment` is included because
-# FINDINGS 0c established that mention counting is not enough - "we would not recommend
+# FINDINGS 2 established that mention counting is not enough - "we would not recommend
 # BrandA" is a mention that means the opposite - and a schema is the cheapest place to
 # get that attribution rather than inferring it downstream.
 BRAND_SCHEMA = {

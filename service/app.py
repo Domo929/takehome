@@ -74,7 +74,7 @@ from llm.metrics import (
 class AskRequest(BaseModel):
     question: str = Field(..., max_length=8000)
     system_prompt: str = "You are a market research assistant. Answer concisely."
-    # Measured optimum and the model's own default (FINDINGS 0e). Set explicitly
+    # Measured optimum and the model's own default (FINDINGS 2). Set explicitly
     # rather than left unset: the effective default lives server-side.
     temperature: float = 1.0
     # Per request, because the two measurement conditions run over the same prompts
@@ -359,7 +359,7 @@ async def ask(payload: AskRequest) -> JSONResponse:
 
     # ALL attempts, not just the last. Using only the final attempt charged failed
     # attempts and their backoff to us: 1807ms p99 on a sub-millisecond path
-    # (FINDINGS 6).
+    # (FINDINGS 3).
     upstream_s = (result.upstream_total_ms or result.latency_ms or 0.0) / 1000.0
     backoff_s = (result.retry_backoff_ms or 0.0) / 1000.0
 

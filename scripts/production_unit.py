@@ -10,7 +10,7 @@ samples see the same web. If retrieval is unstable within a burst then a brand's
 moves for reasons unrelated to the model, and sampling cannot average that out: it is
 not noise around a fixed truth, it is a moving truth.
 
-Results in FINDINGS 0d.
+Results in FINDINGS 2.
 """
 
 from __future__ import annotations

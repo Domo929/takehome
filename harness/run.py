@@ -343,7 +343,7 @@ async def run_closed_loop(
                 stopped.set()
                 return
             # The first seconds at a new concurrency are dominated by TLS handshakes
-            # and cold pool slots, which under-reports throughput ~2.5x (FINDINGS 6f).
+            # and cold pool slots, which under-reports throughput ~2.5x (FINDINGS 4).
             if warmup_s and (time.perf_counter() - started) < warmup_s:
                 stage.warmup_records.append(record)
             else:
@@ -454,7 +454,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--temperature", type=float, default=1.0,
-        help="Sampling temperature. 1.0 is measured, not inherited - see FINDINGS 0e. "
+        help="Sampling temperature. 1.0 is measured, not inherited - see FINDINGS 2. "
              "Never 0: it cannot express a brand share.",
     )
     p.add_argument("--complex-fraction", type=float, default=0.0)
@@ -463,7 +463,7 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Repeat one prompt instead of building distinct ones. This is the real "
             "unit of work (one prompt sampled N times); distinct prompts are the "
-            "right shape for throughput measurement. See FINDINGS 0b."
+            "right shape for throughput measurement. See FINDINGS 5."
         ),
     )
     p.add_argument("--thinking-budget", type=int, default=None)

@@ -486,3 +486,30 @@ async def test_unusable_response_is_logged_as_billed_waste(fake_vertex):
     assert unusable[0]["finish_reason"] == "SAFETY"
     # The point of the record: tokens were billed for an answer we cannot use.
     assert unusable[0]["billed_but_unusable"] is True
+
+
+def test_499_is_retryable_despite_being_a_4xx():
+    """499 means upstream shed us, not that we sent something invalid.
+
+    Bucketing it with the other 4xx codes would permanently fail a request that is
+    worth another attempt. It shows up at request rates well above what this repo
+    measured, which is exactly when a permanent failure is most expensive.
+    """
+    from google.genai import errors as genai_errors
+
+    provider = Gemini(backend="developer", api_key="k")
+    shed = genai_errors.APIError(499, {"message": "The operation was cancelled."})
+
+    translated = provider._translate(shed)
+    assert translated.retryable, "499 must be retryable"
+    assert translated.status_code == 499
+
+
+def test_client_errors_are_not_retried():
+    """The other side of the same coin: a 400 will never succeed on retry."""
+    from google.genai import errors as genai_errors
+
+    provider = Gemini(backend="developer", api_key="k")
+    bad = genai_errors.APIError(400, {"message": "Invalid value at 'generation_config'"})
+
+    assert not provider._translate(bad).retryable

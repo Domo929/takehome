@@ -40,7 +40,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 
 # One worker by default, scaled by replica count rather than by --workers: the useful
 # number is CPU-dependent and belongs to the orchestrator. A single process sheds 61%
-# of load that four absorb at identical total admission capacity (FINDINGS 6i), so
+# of load that four absorb at identical total admission capacity (FINDINGS 3), so
 # this is a decision to make deliberately, not a default to inherit.
 #
 # Exec form so PID 1 is uvicorn and receives SIGTERM directly. Without it the graceful

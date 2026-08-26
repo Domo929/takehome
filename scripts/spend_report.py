@@ -115,7 +115,7 @@ def main() -> None:
         print(f"  {acct:<28} {d['runs']:>6} {d['requests']:>10,} {d['cost']:>12.4f}")
 
     # Grounded runs were priced at $25/1k when their manifests were written; the SKU
-    # rate has since been verified at $35/1k (FINDINGS 0c). Reported as an adjustment
+    # rate has since been verified at $35/1k (FINDINGS 2). Reported as an adjustment
     # rather than by rewriting manifests, which record what was believed at the time.
     grounded = 0
     for f in sorted((REPO / "results").rglob("*-manifest.json")):

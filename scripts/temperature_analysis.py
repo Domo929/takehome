@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Analyse the temperature x category sweep. Reads committed data, spends nothing.
 
-The pilot (FINDINGS 0e, one category) found that a brand's measured share swings with
+The pilot (FINDINGS 2, one category) found that a brand's measured share swings with
 temperature, and that the mechanism looked like phrasing: Anker was reported almost
 only as a parenthetical attribution inside "Eufy (Anker)", and temperature changed how
 often the model bothered with the aside.

@@ -31,7 +31,7 @@ async def test_service_capacity_matches_provider_parallelism(_dev_env):
     async with service_app.lifespan(service_app.app):
         assert service_app.state.provider is not None
         assert service_app.state.capacity == service_app.state.provider.parallelism()
-        # 128 is the top of the measured range; see FINDINGS 6g.
+        # 128 is the top of the measured range; see FINDINGS 1.
         assert service_app.state.capacity == 128
 
 
@@ -59,7 +59,7 @@ async def test_explicit_capacity_override_wins(_dev_env, monkeypatch):
 
 
 async def test_adaptive_limiter_is_off_by_default(_dev_env):
-    """Its justification — that quota moves — is not evidenced (FINDINGS 6b).
+    """Its justification — that quota moves — is not evidenced (FINDINGS 1).
 
     Shipping it enabled would mean running unproven machinery in the request path.
     """

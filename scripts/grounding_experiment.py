@@ -9,9 +9,9 @@ pairing is doing most of the statistical work.
 
 Deliberately excluded - a repeat arm, since production runs these days apart rather
 than hours, and load, since grounding changes the upstream rather than our concurrency
-behaviour and FINDINGS 6g already localised our ceiling to TLS.
+behaviour and FINDINGS 4 already localised our ceiling to TLS.
 
-Results in FINDINGS 0c.
+Results in FINDINGS 2.
 """
 
 from __future__ import annotations

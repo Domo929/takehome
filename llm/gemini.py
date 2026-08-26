@@ -117,7 +117,7 @@ def _build_vertex_client(
             "Vertex backend requires a project: set GOOGLE_CLOUD_PROJECT or pass project=."
         )
     # Region selects a distinct quota pool, so capacity numbers do not transfer
-    # between regions (FINDINGS 4).
+    # between regions (FINDINGS 1).
     resolved_location = location or os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
     client = genai.Client(
         vertexai=True,
@@ -182,7 +182,7 @@ class Gemini(LLM):
             thinking_budget if thinking_budget is not None else _env_int("GEMINI_THINKING_BUDGET", 0)
         )
         # Live web search: changes what the model knows, not how hard it reasons.
-        # Separate per-prompt SKU, ~123x a token-only request (FINDINGS 0c).
+        # Separate per-prompt SKU, ~123x a token-only request (FINDINGS 2).
         self._grounded = (
             grounded if grounded is not None
             else os.getenv("GEMINI_GROUNDED", "").lower() in ("1", "true", "yes")
@@ -191,7 +191,7 @@ class Gemini(LLM):
         # Derived from pool size rather than chosen independently, since the pool is
         # the real ceiling (FINDINGS 3).
         self._max_connections = max_connections or _env_int("GEMINI_MAX_CONNECTIONS", 256)
-        # 128 is the highest level measured, not a proven ceiling (FINDINGS 6g).
+        # 128 is the highest level measured, not a proven ceiling (FINDINGS 4).
         # Half the pool: a limit above it queues on sockets rather than at the
         # admission gate, which is the queueing we cannot see.
         self._parallelism = parallelism_limit or _env_int(
@@ -214,7 +214,7 @@ class Gemini(LLM):
         )
         # Fewer TLS handshakes, which is the dominant client-side cost at high
         # concurrency. Off by default: it fixed event-loop lag but lost throughput
-        # (FINDINGS 6h).
+        # (FINDINGS 4).
         self._http2 = (
             http2 if http2 is not None
             else os.getenv("GEMINI_HTTP2", "").lower() in ("1", "true", "yes")
@@ -235,7 +235,7 @@ class Gemini(LLM):
         pool_size.labels(provider=_PROVIDER).set(self._max_connections)
         self._inflight = 0
 
-        # Opt-in: only earns its place when capacity moves (FINDINGS 6b).
+        # Opt-in: only earns its place when capacity moves (FINDINGS 4).
         if adaptive is None:
             adaptive = os.getenv("GEMINI_ADAPTIVE", "").lower() in ("1", "true", "yes")
         self._limiter: AdaptiveLimiter | None = None
@@ -624,7 +624,7 @@ class Gemini(LLM):
         conditions run over the same prompts. One provider instance then means one
         connection pool, one retry budget and one cost ledger across both; two
         instances would halve the effective pool and double TLS handshakes, which per
-        FINDINGS 6h is where our throughput actually goes.
+        FINDINGS 4 is where our throughput actually goes.
 
         `None` means "use the instance default", which is how the environment
         configures it. An explicit bool always wins.

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Two claims from an external review that rested on assumption rather than measurement.
 
-1. FINDINGS 4 says dynamic thinking is the SDK default. Every run in results/real/ set
+1. FINDINGS 1 says dynamic thinking is the SDK default. Every run in results/real/ set
    thinking_budget explicitly to 0 or -1, so the default itself was never observed. If
    it is not dynamic, section 4's framing - that the default is the expensive footgun -
    is wrong.
 
-2. FINDINGS 8 says responseSchema cannot be combined with grounding, which is measured.
+2. FINDINGS 2 says responseSchema cannot be combined with grounding, which is measured.
    The open question is whether a custom function-declaration tool can, since that would
    restore structured extraction on the grounded arm by a different route.
 

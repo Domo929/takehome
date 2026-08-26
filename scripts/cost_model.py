@@ -10,7 +10,7 @@ scripts/verify_pricing.py.
 
 The headline result is that once grounding is on, none of the token levers matter:
 Batch cannot run grounded requests at all and caching needs 2,048+ input tokens against
-a workload of ~35. See FINDINGS 6c and 0c.
+a workload of ~35. See FINDINGS 5 and 2.
 """
 
 from __future__ import annotations

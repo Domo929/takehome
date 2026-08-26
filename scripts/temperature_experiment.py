@@ -2,14 +2,14 @@
 
 Temperature controls how much 100 samples of one prompt differ from each other, so it
 sets the noise floor of the whole measurement. It was inherited as 0.7 and never
-justified. Results and the recommendation are in FINDINGS 0e.
+justified. Results and the recommendation are in FINDINGS 2.
 
 Each temperature runs as two independent halves so cross-batch drift is measured
 directly rather than inferred - that drift is the noise floor.
 
 Vocabularies are closed and hand-written per category. That cannot discover an
 unexpected brand, which is the accepted cost: a capitalisation heuristic scored "Pro"
-and "Options" as brands earlier (FINDINGS 0c), and for measuring how rates move,
+and "Options" as brands earlier (FINDINGS 2), and for measuring how rates move,
 precision beats recall.
 """
 
@@ -41,7 +41,7 @@ QUESTION_TEMPLATE = "Which {category} brands are worth considering?"
 #
 # Vocabularies are closed and hand-written. That cannot discover an unexpected brand,
 # which is the accepted cost: a capitalisation heuristic scored "Pro" and "Options" as
-# brands earlier (FINDINGS 0c), and for measuring how rates MOVE, precision beats
+# brands earlier (FINDINGS 2), and for measuring how rates MOVE, precision beats
 # recall.
 CATEGORY_BRANDS: dict[str, set[str]] = {
     "robot vacuum": {

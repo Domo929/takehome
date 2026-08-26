@@ -8,7 +8,7 @@ territory.
 
 ```bash
 make venv                 # venv + dependencies
-make test                 # 39 tests, no network, no spend
+make test                 # 52 tests, no network, no spend
 ```
 
 Python 3.12+. k6 and Docker are only needed for the load and observability sections.
@@ -218,7 +218,7 @@ Verify before sending:
 unzip -qo submission.zip -d /tmp/check
 grep -rE "AIza[0-9A-Za-z_-]{30,}" /tmp/check   # expect no matches
 cd /tmp/check && python -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/pytest tests/                        # expect 50 passed, no network
+.venv/bin/pytest tests/                        # expect 52 passed, no network
 ```
 
 ## Troubleshooting

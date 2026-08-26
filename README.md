@@ -1,31 +1,33 @@
 # Evertune Take-home: Gemini 2.5 Flash on Vertex AI
 
-Adds Gemini 2.5 Flash as a provider, plus the evidence that it holds up under load.
+Gemini 2.5 Flash added as a provider, plus the evidence that it holds up when you point
+real traffic at it.
 
-- **[FINDINGS.md](FINDINGS.md)** — what I learned, what I changed and why, what is
-  still unproven.
-- **[RUNBOOK.md](RUNBOOK.md)** — how to run everything.
+- **[FINDINGS.md](FINDINGS.md)** — what I measured, in the order I measured it, and
+  what I'd change before this went to production.
+- **[RUNBOOK.md](RUNBOOK.md)** — how to run any of it.
 
-## What is here
+## What's here
 
 ```
-llm/            provider: gemini.py, errors.py, retry.py, metrics.py, pricing.py
-service/        the provider deployed as an HTTP service - the system under test
-loadtest/k6/    service.js (load test us), vertex.js (control), lib/ (shared corpus)
+llm/            the provider: gemini.py, errors.py, retry.py, metrics.py, pricing.py
+service/        the provider as an HTTP service - what the load tests actually hit
+loadtest/k6/    service.js (load test us), vertex.js (the control), lib/ (shared corpus)
 harness/        in-process experiment driver with a hard spend breaker
-mock/           fake Vertex endpoint - real wire contract, $0
+mock/           fake Vertex endpoint - real wire contract, costs nothing
 observability/  Prometheus + Grafana, dashboards provisioned from disk
 scripts/        experiments and reporting
-tests/          39 tests, no network, no spend
-results/real/   raw JSONL + manifests behind every number in FINDINGS
+tests/          52 tests, no network, no spend
+results/real/   the raw data behind every number in FINDINGS
 docs/evidence/  rendered dashboards
 ```
 
 ## Try it without credentials
 
-The whole system runs against a fake Vertex endpoint that speaks the real
-`:generateContent` contract over real HTTP — including 429s, `MAX_TOKENS`
-starvation, safety blocks, empty 200s and grounding.
+The whole stack runs against a fake Vertex endpoint that speaks the real
+`:generateContent` contract over real HTTP. It'll produce 429s, `MAX_TOKENS`
+starvation, safety blocks, empty 200s and grounding responses on demand — which is the
+point, because a real vendor won't.
 
 ```bash
 make venv && make test
@@ -35,33 +37,43 @@ make capacity          # where it sheds load
 ```
 
 Grafana at http://localhost:3000, folder *Takehome*.
-Full instructions in **[RUNBOOK.md](RUNBOOK.md)**.
 
-## The findings
+## The short version
 
-All of it is in **[FINDINGS.md](FINDINGS.md)**, with the raw data in `results/real/`.
-The four that most changed what I would build:
+Six things that changed what I'd build. All of it, with the data, is in
+**[FINDINGS.md](FINDINGS.md)**.
 
-- **Grounding is the measurement axis, and it is ~99% of the cost.** §0c, §0d
-- **One production unit measured end to end** — one prompt, 100 samples, both
-  conditions. §0d
-- **The concurrency ceiling is ours, not Vertex's.** §6g
-- **Dynamic thinking is the SDK default and costs ~4x.** §4
-- **`responseSchema` cannot be combined with grounding** — Vertex returns a hard 400,
-  so structured output is unavailable exactly where extraction is hardest. §8
-- **Flash-Lite is 11.5x cheaper and finds 30% fewer informative brands** — but on a
-  two-condition workload it saves only 1.6%, because the grounding SKU dominates. §0f
-- **`temperature=0` cannot express a brand share.** Across 11 categories, not one
-  brand in 103 landed between a 10% and 90% mention rate — every brand reads as always
-  or never. It also finds ~35% fewer brands, in every category tested. The measured
-  optimum is **1.0**, which is also the model's own default; the repo previously used
-  an inherited 0.7. §0e
+**Grounding is the measurement, and it's ~99% of the bill.** Evertune runs each prompt
+with live search off, then on, and the gap is the product. A grounded request costs 123x
+an ungrounded one on a separate per-prompt SKU. Which means most token optimisations —
+Batch, caching, even switching to a cheaper model — work on about 1% of the spend.
 
-Reproduce any ratio without spending anything:
+**`temperature=0` can't express a brand share.** Across 11 categories, not one brand in
+103 landed between a 10% and 90% mention rate. Every brand reads as always-named or
+never-named. It also finds ~35% fewer brands. The right value is 1.0, which is the
+model's own default.
+
+**Thinking is on by default and it's expensive.** ~4x the cost on short prompts, more on
+longer ones, and 80% of billed output is reasoning nobody reads. Worse, thinking shares
+its budget with `max_output_tokens`, so a generous budget returns HTTP 200 with no text.
+
+**The concurrency ceiling is ours, not Vertex's.** Throughput scales cleanly to 128, then
+collapses — and event loop lag goes from 5 ms to 4.3 seconds while the connection pool
+sits at 50%. Past that point you need more processes, not more concurrency.
+
+**Structured output doesn't work where you need it.** `responseSchema` can't be combined
+with the search tool, and neither can function calling. So the one condition where
+extraction is hardest is the one where you can't have a schema.
+
+**Citations can't be compared across samples.** Every grounding URL is a per-request
+signed token that expires. Resolve provenance at collection time or lose it.
+
+Check any of it without spending anything:
 
 ```bash
-python scripts/confidence.py    # bootstrap CIs from committed data
-python scripts/spend_report.py  # what has been spent, by account
+python scripts/confidence.py     # bootstrap CIs from committed data
+python scripts/verify_pricing.py # rates against Google's billing catalog
+python scripts/spend_report.py   # what this cost, by account
 ```
 
 ## Cost safety

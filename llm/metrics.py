@@ -8,7 +8,7 @@ client silently caps out, and nothing in the vendor's response reveals it (FINDI
 Exceeds 1.0 when oversubscribed.
 
 `llm_event_loop_lag_seconds` - is the ceiling us or them? If lag climbs with load, the
-client is the bottleneck and vendor-side numbers are meaningless (FINDINGS 6g).
+client is the bottleneck and vendor-side numbers are meaningless (FINDINGS 4).
 
 `llm_spend_usd_total` - computed from real usage_metadata, never estimated, so the cost
 governor trips on money actually spent.

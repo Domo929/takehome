@@ -61,7 +61,7 @@ class Behavior:
     retry_after_s: float = 1.0
     seed: int | None = None
 
-    # Grounding: calibrated against 20 paired real Vertex requests (see FINDINGS 0c).
+    # Grounding: calibrated against 20 paired real Vertex requests (see FINDINGS 2).
     # An earlier version of this mock assumed retrieved passages were billed as prompt
     # tokens (6x inflation). Measurement falsified that: input tokens are *identical*
     # grounded or not, so retrieval is priced entirely in the per-prompt SKU. What does

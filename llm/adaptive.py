@@ -1,6 +1,6 @@
 """Adaptive concurrency limiting. Off by default.
 
-The case for it and the measurements behind it are in FINDINGS 6b, including the
+The case for it and the measurements behind it are in FINDINGS 4, including the
 reason it ships disabled: its justification is that Dynamic Shared Quota moves, and I
 have not proven that it does on any timescale that matters.
 
