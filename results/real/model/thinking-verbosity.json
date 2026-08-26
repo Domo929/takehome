@@ -1,0 +1,23 @@
+{
+  "terse": {
+    "ratio": 38.495769881556676,
+    "off_tokens": 2.55,
+    "dyn_tokens": 224.15,
+    "thinking": 221.675,
+    "n": 40
+  },
+  "normal": {
+    "ratio": 1.2765705193204688,
+    "off_tokens": 1600.775,
+    "dyn_tokens": 2044.0,
+    "thinking": 1597.925,
+    "n": 40
+  },
+  "verbose": {
+    "ratio": 1.0307613303394318,
+    "off_tokens": 1982.9,
+    "dyn_tokens": 2044.0,
+    "thinking": 1824.15,
+    "n": 40
+  }
+}

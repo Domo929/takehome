@@ -1,0 +1,39 @@
+{
+  "experiment": "tool_refusal",
+  "question": "does attaching google_search change whether the model answers?",
+  "started_utc": "2026-08-26T05:34:21Z",
+  "duration_s": 49.4,
+  "project": "evertune-tests",
+  "location": "us-central1",
+  "model": "gemini-2.5-flash",
+  "temperature": 1.0,
+  "max_output_tokens": 512,
+  "paired_prompts": 50,
+  "conditions": [
+    {
+      "condition": "tool_attached",
+      "n": 50,
+      "errors": 0,
+      "refusals": 0,
+      "empty": 0,
+      "truncated": 22,
+      "mean_answer_chars": 1599.12,
+      "total_cost_usd": 1.7972417
+    },
+    {
+      "condition": "no_tool",
+      "n": 50,
+      "errors": 0,
+      "refusals": 0,
+      "empty": 0,
+      "truncated": 2,
+      "mean_answer_chars": 659.74,
+      "total_cost_usd": 0.0212717
+    }
+  ],
+  "discordant_pairs": [],
+  "requests": 100,
+  "modelled_cost_usd": 1.8185134,
+  "grounded_prompts_billed": 50,
+  "grounding_rate_assumed_usd_per_1k": 35.0
+}

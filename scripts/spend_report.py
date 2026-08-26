@@ -21,6 +21,8 @@ import json
 import pathlib
 from collections import defaultdict
 
+from llm.pricing import GROUNDING_FREE_PROMPTS_PER_MONTH, GROUNDING_USD_PER_1K_PROMPTS
+
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
 # Requests issued outside the harness, so not captured in any manifest. Counted at a
@@ -114,22 +116,34 @@ def main() -> None:
         d = by_account[acct]
         print(f"  {acct:<28} {d['runs']:>6} {d['requests']:>10,} {d['cost']:>12.4f}")
 
-    # Grounded runs were priced at $25/1k when their manifests were written; the SKU
-    # rate has since been verified at $35/1k (FINDINGS 2). Reported as an adjustment
-    # rather than by rewriting manifests, which record what was believed at the time.
+    # Early grounded runs were priced at $25/1k when their manifests were written; the
+    # SKU has since been verified at $35/1k (FINDINGS 2). Manifests are not rewritten,
+    # they record what was believed at the time, so the correction is reported here.
+    # Each manifest carries the rate it used, because assuming a single rate across all
+    # runs is what made the original number wrong.
     grounded = 0
+    shortfall = 0.0
     for f in sorted((REPO / "results").rglob("*-manifest.json")):
         try:
-            grounded += json.loads(f.read_text()).get("grounded_prompts_billed", 0)
+            m = json.loads(f.read_text())
         except json.JSONDecodeError:
             continue
+        n = m.get("grounded_prompts_billed", 0)
+        if not n:
+            continue
+        grounded += n
+        used = m.get("grounding_rate_assumed_usd_per_1k", 25.0)
+        shortfall += n * (GROUNDING_USD_PER_1K_PROMPTS - used) / 1000.0
     if grounded:
-        print(f"\n  Grounding adjustment: {grounded} grounded prompts modelled at "
-              f"$25/1k = ${grounded * 0.025:.2f}")
-        print(f"    at the verified $35/1k they are ${grounded * 0.035:.2f}, so the "
-              f"total below understates by ${grounded * 0.010:.2f}")
-        print(f"    both may overstate: the SKU's first 1,500 prompts are free and only "
-              f"{grounded} were issued")
+        true_cost = grounded * GROUNDING_USD_PER_1K_PROMPTS / 1000.0
+        print(f"\n  Grounding: {grounded} grounded prompts, "
+              f"${true_cost:.2f} at the verified ${GROUNDING_USD_PER_1K_PROMPTS:.0f}/1k")
+        if shortfall > 0.005:
+            print(f"    runs written before the rate was verified understate by "
+                  f"${shortfall:.2f}; later runs already use the correct rate")
+        print(f"    all of it may be free: the SKU's first "
+              f"{GROUNDING_FREE_PROMPTS_PER_MONTH:,} prompts per month cost nothing "
+              f"and only {grounded} were issued")
 
     evertune = by_account.get("Evertune (vertex)", {"cost": 0.0, "requests": 0})
     print(

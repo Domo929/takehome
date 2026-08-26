@@ -9,7 +9,7 @@ analysis scripts re-derive their numbers from those files, so any figure can be 
 without spending a cent. Where I got something wrong and corrected it, the correction is
 in Appendix B rather than scattered through the text.
 
-Total spend on `evertune-tests`: **$46.32 across 96,614 requests**. Run
+Total spend on `evertune-tests`: **$49.48 across 99,887 requests**. Run
 `python scripts/spend_report.py` for the breakdown.
 
 ---
@@ -290,6 +290,36 @@ Flash-Lite is the cleanest example. Switching models looks like an 11.5x win on 
 prices. On the real two-condition workload it saves **1.6%** while losing 30% of the
 informative measurement. Once a per-prompt SKU dominates, model selection stops being a
 cost lever.
+
+### Attaching the tool doesn't make the model refuse, but it does change the shape
+
+During earlier probing one grounded request declined a question that the same model
+answers happily with no tool attached. n=1, so it could have been nothing, but it was
+worth settling. If attaching a tool changes the model's *willingness* to answer, then the
+grounded-versus-ungrounded delta measures two things at once and Evertune's headline
+number carries a confound.
+
+It doesn't replicate. 50 paired prompts, same prompt to both arms, only the tool differs
+(`results/real/measurement/tool-refusal-*`):
+
+| | Refusals | Truncated | Mean answer | Mean output tokens |
+|---|---|---|---|---|
+| Tool attached | **0 / 50** | 22 (44%) | 1,599 chars | 373.8 |
+| No tool | **0 / 50** | 2 (4%) | 660 chars | 166.0 |
+
+Zero refusals either way. With 50 samples and nothing observed, the 95% upper bound on
+the true rate is about 6%, so a common effect is ruled out. A rare one isn't, and I'd
+rather say that than claim the question is closed.
+
+The rest of the table is the real result. Attaching the tool makes the model **2.3x more
+verbose**, and truncation goes from 4% to 44%. That's a much bigger operational problem
+than a refusal would have been, and it's the same finding as the earlier grounding run,
+now on a second sample. The grounded arm needs a larger output cap, not the same one.
+
+One request in that run came back `MAX_TOKENS` with zero output tokens and still billed
+the full $0.035 grounding charge before the retry succeeded. Worth knowing that a failed
+grounded request costs the same as a successful one, so retries on the grounded arm are
+123x more expensive than retries on the ungrounded arm.
 
 ### Grounding changes the answers, which is the whole point
 
@@ -661,11 +691,10 @@ component doing the retrying.
 Two independent runs agreeing to three significant figures on truncation, and within 7%
 on retry rate, is the part I'd stake a production decision on.
 
-One caveat I want to be honest about: both runs happened on the same afternoon. Vertex
-uses Dynamic Shared Quota, so the ceiling moves with whatever else is running in the
-region, and a 0.05% retry rate reflects the conditions I got rather than a structural
-property of the endpoint. Two runs twelve minutes apart is not a test of day-to-day
-variability. I'd want a week of these before treating 37 rps as a planning number.
+One caveat I want to be honest about: both runs happened on the same afternoon. I later
+re-ran the same configuration overnight 32 hours later and got 31.9 rps against 36.9, so
+there is real run-to-run variation and 37 rps is not a planning number. The section below
+on that off-peak probe explains why the variation isn't what I first assumed it was.
 
 Quota is enforced per minute and a cold connection pool takes tens of seconds to warm,
 so both facts set a floor on how long a capacity test has to run. Sub-minute runs
@@ -694,7 +723,7 @@ a 4xx would fail the request permanently on a condition that's worth another att
 didn't hit it at 37 rps, but it's the kind of thing that only shows up at rates well
 past what I ran.
 
-### The concurrency ceiling is 128, and past it the bottleneck is us
+### Our client peaks at 128 concurrent, and past it the bottleneck is us
 
 Vertex us-central1, 25–75 s measured per stage after discarding a warm-up window
 (`results/real/capacity/vertex-knee-*` and `vertex-extreme-*`):
@@ -709,9 +738,15 @@ Vertex us-central1, 25–75 s measured per stage after discarding a warm-up wind
 | 1024 | 43.7 rps | 0.043 | 17,557 ms | 49,443 ms | **4,301 ms** | 50% |
 
 Linear to 128. Rps per unit of concurrency holds between 0.50 and 0.58 across a 16x
-range, which is Little's Law behaving (throughput = concurrency ÷ latency, so at a fixed
+range, which is Little's Law behaving (throughput = concurrency / latency, so at a fixed
 latency each extra concurrent request should buy a fixed amount of throughput). p50
 actually *improves* up to 128.
+
+Flat latency across a 16x range is the tell. If Vertex were rationing anything, pushing
+16x more concurrency at it would show up as rising latency or rejections, and neither
+happens. Nothing is saturated in that top half of the table. I'm filling a pipe that has
+spare room at both ends, and the throughput number is whatever I chose for concurrency
+divided by the model's natural response time.
 
 Then it collapses. At 1024 the throughput is below the c=64 level, p50 is 13x worse, and
 p99 reaches 49 seconds. Pushing 8x harder than the optimum delivers 40% less work.
@@ -721,10 +756,11 @@ it couldn't be the constraint, while event loop lag went from under 5 ms to **4.
 seconds**. At c=1024, a quarter of the 17.5 s p50 is our own scheduler delay before a
 request reaches the network.
 
-So the answer to "is the ceiling us or them" flips depending on the operating point. Up
-to 128
-it's Vertex and our client is idle. Past 128 the ceiling is a single Python process and
-Vertex isn't the limiting factor at all.
+So the answer to "is the ceiling us or them" is neither, and then us. Up to 128 nobody is
+constrained: Vertex isn't pushing back and our client is idle. Past 128 the limit is a
+single Python process, and Vertex still isn't the limiting factor. I never located a
+vendor ceiling anywhere in this table, which the off-peak probe below confirms from a
+different angle.
 
 Without `llm_event_loop_lag_seconds` the c=1024 result reads as "Vertex collapses under
 load," which is both wrong and the kind of wrong that gets escalated to a vendor.
@@ -751,8 +787,10 @@ because it's the evidence for the TLS diagnosis, not because I recommend it.
 ### Adaptive concurrency: it works, but the premise is unproven
 
 `parallelism()` returning a constant assumes capacity is something discovered once.
-Vertex uses Dynamic Shared Quota, which publishes no per-project ceiling and moves with
-regional demand, so any constant has a shelf life.
+Vertex uses Dynamic Shared Quota, which publishes no per-project ceiling and is
+documented as moving with regional demand, so on paper any constant has a shelf life.
+That was the reasoning. Whether it survives contact with measurement is the next
+section.
 
 I built a gradient limiter that keys on **latency** rather than error codes, because
 Vertex often doesn't reject excess load. It just slows down. A controller watching only
@@ -794,9 +832,58 @@ only client is our own harness and we control its arrival rate.
 **It still ships off by default**, and the reason is the row that isn't in the table. The
 capacity collapse was simulated by reconfiguring the mock. That's a fair test of the
 controller's dynamics and a poor test of the premise, because it assumes the thing it was
-built for. My two soaks twelve minutes apart saw the same ceiling, which is weak evidence
-*against* quota moving at all. A controller justified by an unmeasured claim about someone
-else's infrastructure should be off until the claim is measured.
+built for.
+
+So I went and tested the premise.
+
+### I never found Vertex's quota ceiling at all
+
+My first two soaks ran thirty minutes apart on a Monday afternoon in US hours. That's no
+test of whether capacity moves. I re-ran the identical configuration 32 hours later at
+05:37 UTC, which is the middle of the night in the US and about as far from the first
+runs' demand conditions as I can get without waiting for a holiday
+(`results/real/capacity/vertex-dsq-offpeak-*`):
+
+| Run | When (UTC) | rps | p50 | p99 | Truncated | Rate limits |
+|---|---|---|---|---|---|---|
+| soak | Mon 20:58 | 35.6 | 1,401 ms | 7,033 ms | 3.34% | **0** |
+| soak-long | Mon 21:28 | 36.9 | 1,379 ms | 6,324 ms | 3.26% | **0** |
+| off-peak | Wed 05:37 | 31.9 | 1,464 ms | 8,182 ms | 3.62% | **0** |
+
+Two things, and the second one matters more.
+
+The ceiling moved 14% across a 32-hour gap spanning peak and overnight, and it moved the
+*wrong way*. Off-peak was slower, not faster. If Dynamic Shared Quota were handing out
+spare regional capacity at 5am, this run should have been the fastest of the three. It
+was the slowest. Whatever that 14% is, it isn't demand-driven quota.
+
+**And there were zero rate-limit errors in any of them.** Not a low number, zero, across
+roughly 70,000 requests. Every single "error" in those runs is a `MAX_TOKENS` truncation
+at the 512 cap, which is a formatting problem, not a capacity one.
+
+Which means the 36.9 rps I've been calling a ceiling isn't a ceiling. Look at what
+throughput actually equals here:
+
+| Run | Concurrency / mean latency | Measured rps |
+|---|---|---|
+| soak | 64 / 1.627 s = 39.3 | 35.6 |
+| soak-long | 64 / 1.592 s = 40.2 | 36.9 |
+| off-peak | 64 / 1.754 s = 36.5 | 31.9 |
+
+Throughput is just concurrency divided by latency, within about 10%. That's Little's Law
+doing exactly what it says, and it means the number was set by how many requests I chose
+to hold in flight, not by anything Google imposed. The concurrency sweep agrees: 73.7 rps
+at c=128 is 128 divided by roughly the same latency.
+
+So I measured our own client's behaviour and reported it as the vendor's limit. The real
+Vertex ceiling is somewhere above where I stopped, and I stopped because our TLS
+handshake path fell over at c=256, not because Vertex pushed back.
+
+That's the honest conclusion, and it makes the adaptive limiter's case weaker rather than
+stronger. A controller that keys on latency to find a quota wall is solving for a wall I
+have no evidence exists. Three runs, two demand regimes, 70,000 requests, no 429s. It
+stays off, and I'd want a run that deliberately climbs until Google actually rejects
+something before shipping it.
 
 ---
 
@@ -1019,15 +1106,6 @@ Grounded answers carry retrieval variance on top of generation variance, so they
 noisier, not quieter. But nobody has told me the sampling policy has to match across
 conditions, and at 123x per request that's the largest lever left.
 
-**Does attaching a tool change what the model will say?** One request declined a question
-it answers freely without a tool attached. n=1, no rate claimed. If it replicates it's a
-serious confound for a product whose measurement is the answer content. About a cent to
-settle with 20 paired requests.
-
-**Does Dynamic Shared Quota actually move?** That's the entire justification for the
-adaptive limiter, and two runs twelve minutes apart isn't a test of it. A multi-hour run
-across a business-hours boundary would settle whether to enable it or delete it.
-
 **Does retrieval variance move brand share?** Grounded answers vary and retrieval varies.
 Separating "the model changed its mind" from "different pages came back" needs the same
 unit re-run days apart.
@@ -1105,7 +1183,9 @@ project was live, because those numbers don't transfer between endpoints.
 | Service overhead and shedding | validated | k6 summaries |
 | Worker count vs GIL | validated | k6, capacity held constant |
 | Sustained soak | measured | `capacity/vertex-soak-long-*` |
-| Concurrency ceiling 128 | measured | `capacity/vertex-*` |
+| Client peaks at c=128 | measured | `capacity/vertex-*` |
+| No quota wall found, 0 rate limits | measured | `capacity/vertex-dsq-offpeak-*` |
+| Tool attached does not cause refusals | measured | `measurement/tool-refusal-*` |
 | HTTP/2 | measured | `capacity/vertex-http2-*` |
 | Adaptive limiter | validated | `local/adaptive-experiment.txt` |
 | Pricing rates | verified | Cloud Billing Catalog API, `scripts/verify_pricing.py` |

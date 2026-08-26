@@ -236,20 +236,35 @@ __marimo__/
 # Measurement evidence is committed, because a findings document that cites data
 # nobody else can read is asking to be taken on trust.
 #
-# Manifests always: they carry the aggregates, percentiles, time-series windows and
-# cost reconciliation that every number in FINDINGS is derived from.
+# The split is by what the file is for, not by its name:
 #
-# Per-request records only for the experiments, because scripts/confidence.py and
-# scripts/temperature_analysis.py re-derive their results from them. That is what
-# makes "reproduce any ratio without spending" true rather than a claim.
+#   model/, measurement/  experiments. Per-request records are committed so
+#                         scripts/confidence.py and scripts/temperature_analysis.py
+#                         re-derive their numbers from the same data a reader has.
+#                         About 4 MB, which is the price of "reproduce any ratio
+#                         without spending" being true rather than a claim.
 #
-# Per-request records for the load runs stay out: 20MB of one-line-per-request for
-# throughput tests whose manifests already contain every derived figure.
+#   capacity/             load runs. Manifests only. The per-request records are 28 MB
+#                         of one line per request for throughput tests whose manifests
+#                         already carry every derived figure, including the 30-second
+#                         windows.
+#
+#   local/                mock-backed runs, plain text summaries.
+#
+# These rules re-open each directory level explicitly. Git will not descend into an
+# excluded directory to find a negation inside it, so a missing level fails silently:
+# the run succeeds, the file lands, and `git status` stays quiet. That has already
+# happened twice in this repo.
 results/*
 !results/real/
 results/real/*
+!results/real/*/
+!results/real/README.md
 !results/real/*-manifest.json
 !results/real/*.txt
-!results/real/grounding-*.jsonl
-!results/real/production-unit-*.jsonl
-!results/real/temperature-*.jsonl
+results/real/*/*
+!results/real/*/*-manifest.json
+!results/real/*/*.txt
+!results/real/model/**
+!results/real/measurement/**
+results/real/capacity/*.jsonl
