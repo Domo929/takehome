@@ -299,6 +299,19 @@ def main() -> int:
     broken = sorted(set(re.findall(r"\]\(#([a-z0-9-]+)\)", text)) - heads)
     check("every anchor link resolves", broken, [])
 
+    # The document states this number in two places, and they had already drifted to
+    # 72 and 67 while the real count was 85. A verification claim that misreports its
+    # own size is worse than not making it, so the count checks itself.
+    global checks
+    stated = set(int(m) for m in re.findall(r"re-derives all (\d+)", text))
+    checks += 1
+    if stated and stated != {checks}:
+        print(f"  FAIL  {'FINDINGS states the right check count':<52} "
+              f"says {sorted(stated)}, actual {checks}")
+        failures.append("stated check count")
+    else:
+        print(f"  ok    {'FINDINGS states the right check count':<52} {checks}")
+
     print()
     print(f"{checks} checks, {len(failures)} failed")
     if failures:

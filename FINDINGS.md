@@ -5,7 +5,7 @@ to break it. This is what I learned, in roughly the order I learned it.
 
 One note before the results. Everything here is backed by data in `results/real/`: raw
 per-request records for the experiments, run manifests for everything else. Nothing is
-typed by hand. `make verify` re-derives all 72 headline figures from those files and
+typed by hand. `make verify` re-derives all 86 headline figures from those files and
 exits non-zero if this document disagrees with its own data, so any number here can be
 checked in a few seconds without spending a cent. Appendix B covers how that came about
 and what it caught.
@@ -29,7 +29,7 @@ It is a long document, so here is the map. The left column is the brief.
 | Things I tried that didn't work | HTTP/2 in [4](#tls-is-what-costs-us-and-http2-doesnt-fix-it), the adaptive limiter in [4](#adaptive-concurrency-it-works-but-the-premise-is-unproven), structured output in [2](#structured-output-does-not-work-where-it-is-needed-most), context caching in [5](#could-we-pad-the-prompt-to-reach-the-cache-floor) |
 | What I'd do next in production | [7. What I'd do before production](#7-what-id-do-before-production) |
 | What I'd want to know first | [8. Open questions](#8-open-questions) |
-| The numbers behind all of it | [Appendix A](#appendix-a-evidence-and-how-to-check-it), and `make verify` re-derives all 67 |
+| The numbers behind all of it | [Appendix A](#appendix-a-evidence-and-how-to-check-it), and `make verify` re-derives all 86 |
 | How the numbers were checked | [Appendix B](#appendix-b-how-the-numbers-were-checked) |
 
 If you only read one section, read [5. What it costs to run](#5-what-it-costs-to-run).
@@ -59,9 +59,8 @@ it scales, what grounding costs, what temperature does to a brand's measured sha
 what logprobs add on top of counting.
 
 **Build it and test it locally.** The integration runs as an HTTP service and k6
-drives it. I wrote a fake Vertex endpoint that speaks the real wire contract so I could
-find our own bottlenecks for free, and injected failures that a real vendor won't
-produce on demand.
+drives it. I also wrote a fake Vertex endpoint, which is where most of the iteration
+happened: free, and it will produce failures on demand that Google won't.
 
 **Then point it at Vertex.** Sustained soaks and a concurrency sweep to find where the
 ceiling actually is, and whether it belongs to us or to Google. It turned out to be ours,
@@ -281,9 +280,10 @@ runs, passes a smoke test, and misreports cost and truncation in production. Tha
 
 ## 2. What I learned about the measurement
 
-Evertune runs each prompt 100 times, and runs it twice, once with live search off, once
-with it on. The gap between those two answers is the product. That shape has some
-properties worth knowing before it scales.
+The gap between the two conditions is the product. Everything below is about what that
+shape does when you scale it: what the second condition costs, what temperature does to
+a number that is supposed to be a share, and how big a change has to be before it means
+anything.
 
 ### Grounding is the measurement, and it's almost the entire bill
 
@@ -320,8 +320,7 @@ prompt against $0.04.
 
 ### Which means most cost levers don't matter
 
-This is the part I'd want a reviewer to sit with, because it inverts the obvious
-analysis.
+The obvious analysis is backwards here.
 
 Every figure below comes from the paired n=20 grounding run, which measured both
 conditions on the same prompts, so the shares are internally consistent rather than
@@ -395,11 +394,9 @@ sized it with the usual four-characters-per-token rule and this prose runs close
 five and a half. The script now asserts the arm cleared the floor and says so loudly if
 it did not, because a mis-calibrated run and a real negative look the same.)*
 
-Worth being explicit about what is not on that list: **the model**. Evertune measures
-each model as its own target, so Flash and Flash-Lite are two different measurements
-rather than two prices for the same one. Switching between them to save money would be
-like dropping a tracked brand to save money. Section 1 compares them because the brief
-asked how this model differs from others, not because the cheaper one is an option.
+One thing is deliberately not on that list: **the model**. Section 1 has the argument,
+but the short version is that a cheaper model is a different measurement, not a cheaper
+way to take the same one.
 
 Every lever that *is* a lever lives inside a single model, and on this workload they all
 share the same 3%.
@@ -481,10 +478,9 @@ Resolving product lines to their parent:
 | Anker | **-15** (significant) | **+34** | **sign flips** |
 | Ecovacs | +41 | +36 | holds |
 
-The Anker row is the one to sit with. As reported, Anker loses 15 points when grounding
-is on. As a company it gains 34, because 99% of grounded answers name Eufy. A dashboard
-built on the first number tells Anker their visibility collapsed in exactly the quarter it
-more than doubled.
+The Anker row matters most. As reported it loses 15 points when grounding is on. As a
+company it gains 34, because 99% of grounded answers name Eufy. Report the first number
+and you tell Anker their visibility collapsed in a quarter when it doubled.
 
 This isn't an extractor bug, it's a missing step. In the ungrounded arm iRobot and Roomba
 appear together in **100 of 100** answers, so summing them gives a 200% share, which is
@@ -595,14 +591,11 @@ that are not comparable.
 
 ### How big does a change have to be before it's real?
 
-I first answered this with a single number, and the number was wrong in the direction
-that matters. Splitting each 60-sample cell into independent halves and measuring
-per-brand rate drift gives about **5 points** at temperature 1.0, and I wrote that up as
-the noise floor: anything smaller isn't a finding.
-
-Three things are wrong with using it that way. It's a **mean**, and a threshold needs a
-tail. It was measured at **n=30 per half**, while production samples 100. And it's quoted
-as **one number** when the noise depends on where the brand sits.
+Splitting each 60-sample cell into independent halves and measuring per-brand rate
+drift gives about **5 points** at temperature 1.0. That is a real number and it is the
+wrong threshold, for three reasons. It's a **mean**, and a threshold needs a tail. It was
+measured at **n=30 per half**, while production samples 100. And it's one number when the
+noise depends on where the brand sits.
 
 Simulating two independent samples of the same brand at the same setting, which is the
 question a "did this move?" alert is really asking:
@@ -614,7 +607,7 @@ question a "did this move?" alert is really asking:
 | 30% | **100** | 5.2 pts | **13.0 pts** |
 | 50% | **100** | 5.6 pts | **14.0 pts** |
 
-So at production sample sizes the honest threshold is **8 points for a niche brand and 14
+So at production sample sizes the threshold is **8 points for a niche brand and 14
 for a mid-share one**, not 5. My original figure would have called a 6-point move real.
 For a brand sitting near 50%, one run in three moves further than that with nothing
 changing at all.
@@ -751,10 +744,9 @@ answers 2.25x longer in billed tokens, which is a real problem and a different o
 
 ## 3. What I learned load testing our own code
 
-The thing that has to survive production traffic is our service, not Vertex. So the
-integration runs as an HTTP service and k6 drives it over HTTP exactly the way real
-traffic would, separate process, separate runtime, no shared event loop to flatter us
-with.
+The thing that has to survive production traffic is our service, not Vertex. So k6
+drives it over HTTP the way real traffic would: separate process, separate runtime, no
+shared event loop to flatter the numbers.
 
 ```
 k6  ->  service/app.py  ->  llm/gemini.py  ->  Vertex (or the mock)
@@ -934,12 +926,11 @@ quota.
 Nine requests needed a second attempt in the first soak, 24 in the second. All 33
 eventually succeeded and not one surfaced to a caller.
 
-I originally headed this section "Vertex does rate limit," which the data does not
-support. **No run in this document recorded a single 429**, across roughly 97,000 requests
-spanning three soaks, a concurrency sweep and the k6 ceiling run. Those 33 retries are
-transient failures of some kind, and the honest statement is that the per-request records
-capture the retry count but not the reason, so I can't name it. That's a gap in my
-instrumentation, not evidence about Google.
+They are not rate limits. **No run in this document recorded a single 429**, across
+roughly 97,000 requests spanning three soaks, a concurrency sweep and the k6 ceiling run.
+What those 33 were, I can't say: the per-request records capture the retry count but not
+the reason. That's a gap in my instrumentation rather than a fact about Google, and the
+fix is one field.
 
 What the number does support is the design decision behind it. `llm/retry.py` retries in
 our own code rather than delegating to the SDK's `HttpRetryOptions`, so retried failures
@@ -1082,12 +1073,10 @@ Two things, and the second one matters more.
 Throughput moved 14% across a 32-hour gap, and it moved the way I did not expect:
 off-peak was slower, not faster.
 
-I first wrote that up as evidence against demand-driven quota, which is more than two
-runs can carry. I don't know that a US datacentre is quieter at 05:37 UTC. Scheduled
-batch jobs may well cluster overnight while interactive traffic clusters in the day, in
-which case my "off-peak" probe landed on someone else's peak. Two points establish that
-the number varies. They establish nothing about why, and a 14% swing is well inside what
-I would expect from ordinary run-to-run variance anyway.
+Two runs cannot carry a claim about why. I don't know that a US datacentre is quieter
+at 05:37 UTC; scheduled batch work may cluster overnight while interactive traffic
+clusters in the day, in which case the "off-peak" probe landed on someone else's peak.
+A 14% swing is also well inside ordinary run-to-run variance.
 
 The honest version: **no run here observed contention**, and none of them was designed
 to. All three sat at concurrency 64, which the next section shows was nowhere near any
@@ -1115,8 +1104,6 @@ at c=128 is 128 divided by roughly the same latency.
 So I measured our own client's behaviour and reported it as the vendor's limit. The real
 Vertex ceiling is somewhere above where I stopped, and I stopped because our TLS
 handshake path fell over at c=256, not because Vertex pushed back.
-
-So I measured our own client's behaviour and reported it as the vendor's limit.
 
 ### So I pointed k6 at Vertex and went looking for the wall
 
@@ -1153,10 +1140,9 @@ load. It does mean this run is evidence about admission and throughput and nothi
 It is not evidence that 550 rps of *usable brand samples* is achievable, and I have not
 measured that.
 
-**Which means I did not find Vertex's limit. I found the number I typed into the
-config.** The ramp's top stage says `target: 550`, so k6 dispatched 550 and stopped. That
-is worth being blunt about, because a table full of zeroes can read like a discovery when
-it is really an absence.
+**Which means this is a lower bound, not a ceiling.** The ramp's top stage says
+`target: 550`, so k6 dispatched 550 and stopped. A table of zeroes reads like a discovery
+when it is really an absence.
 
 Three things say the generator wasn't the constraint either:
 
@@ -1174,7 +1160,7 @@ ramps to 4,000 rps for free: **57,941 requests, zero dropped iterations, p99 81 
 k6 on this machine delivers a 4,000 rps schedule without complaint. The Vertex run asked
 it for 550, about 14% of that.
 
-So the honest reading of the table is a floor, not a ceiling. Vertex sustained at least
+So the table is a floor, not a ceiling. Vertex sustained at least
 550 rps. Its actual limit is somewhere above, and I stopped because I had answered the
 question that mattered, not because Google made me.
 
@@ -1645,9 +1631,9 @@ here combined.
 provider takes one cap per instance, so running both arms at the right cap means two
 provider instances or a per-request override, and today it is neither.
 
-And decide deliberately what a truncated answer is worth. I had written that `is_usable`
-discards them, which is true of the harness and false of the service: `/ask` returns a
-truncated answer as HTTP 200, because it is not empty and nothing raises. It now carries
+And decide deliberately what a truncated answer is worth. `is_usable` discards them in
+the harness but not at the service boundary: `/ask` returns a truncated answer as HTTP
+200, because it is not empty and nothing raises. It now carries
 a `usable: false` flag so a caller can tell, but the policy question is still open and
 belongs to whoever owns the pipeline. Dropping them reduces the sample count silently;
 keeping them lets a fragment like `"iRobot,"` count as a mention.
@@ -1733,10 +1719,9 @@ Catalog API, which is the data invoices are generated from.
 projections are the only ones, and section 5 lists which inputs are Evertune's and which
 are mine.
 
-One thing worth saying plainly, since the early work ran on a personal Gemini Developer
-API key while GCP access was pending. Nothing in the table below rests on it. Everything
+The first two days ran on my own key while GCP access was pending. Nothing in the table below rests on it. Everything
 that touches cost, capacity or latency was re-run against `evertune-tests` once the
-project was live, because those numbers don't transfer between endpoints.
+project was live. Throughput and latency belong to an endpoint, not to a model.
 
 | Finding | Class | Data |
 |---|---|---|
@@ -1798,7 +1783,7 @@ the rest.
 Headline ratios carry bootstrap intervals and small-n results say so.
 
 The thinking ratio is worth a note. I originally ran it at n=15 per config and quoted
-4.0x without an interval. Putting one on it was sobering: **[2.36, 7.42]**. That is not
+4.0x without an interval. The interval turns out to be **[2.36, 7.42]**. That is not
 a measurement, it is a range containing most plausible answers, and I had been treating
 it as a fact. Re-running at n=100 moved the point estimate barely (3.60x) and tightened
 the interval to [3.00, 4.36], which is finally usable.
@@ -1869,11 +1854,10 @@ puts an interval on anything load-bearing, and that is what surfaced the Neato r
 **External rates are queried, not remembered.** `scripts/verify_pricing.py` checks all
 five rates against Google's catalog on every run.
 
-The pattern behind most of these is the same, and it is worth stating plainly because it
-is not specific to this exercise: a number that is correct when written stays in the
-document after the thing it described has moved. Nothing errors. It reads exactly like a
-number that is still true. The only defence is making the document re-derive itself,
-which is cheap to build once and free to run afterwards.
+Most of these share a failure mode: a number that was right when written stays in the
+document after the thing it described moves. Nothing errors, and it reads exactly like a
+number that is still true. Regenerating from source is the only defence I know of that
+does not depend on remembering.
 
 ---
 
