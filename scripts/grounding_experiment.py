@@ -130,7 +130,7 @@ async def main() -> None:
     ap.add_argument("--location", default="us-central1")
     ap.add_argument("--model", default="gemini-2.5-flash")
     ap.add_argument("--max-output-tokens", type=int, default=512)
-    ap.add_argument("--out", default="results/real/grounding")
+    ap.add_argument("--out", default="results/real/measurement/grounding")
     ap.add_argument(
         "--yes", action="store_true",
         help="required: this run bills real money against a real project",

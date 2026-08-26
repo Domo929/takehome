@@ -58,6 +58,6 @@ async def main():
                   "dyn_tokens":statistics.fmean(r['out'] for r in v['dyn']),
                   "thinking":statistics.fmean(r['think'] for r in v['dyn']),
                   "n":len(v['off'])} for k,v in rows.items()},
-              open("results/real/thinking-verbosity.json","w"), indent=2)
+              open("results/real/model/thinking-verbosity.json","w"), indent=2)
 
 asyncio.run(main())

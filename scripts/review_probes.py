@@ -91,7 +91,7 @@ async def main() -> None:
     ap.add_argument("--project", default="evertune-tests")
     ap.add_argument("--location", default="us-central1")
     ap.add_argument("--model", default="gemini-2.5-flash")
-    ap.add_argument("--out", default="results/real/review-probes")
+    ap.add_argument("--out", default="results/real/model/review-probes")
     ap.add_argument("--yes", action="store_true")
     args = ap.parse_args()
 

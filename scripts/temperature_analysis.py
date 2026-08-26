@@ -50,7 +50,7 @@ def rate_table(rows: list[dict]) -> dict[tuple[str, str], dict[float, float]]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--pattern", default="results/real/temperature-multi-*.jsonl")
+    ap.add_argument("--pattern", default="results/real/measurement/temperature-multi-*.jsonl")
     ap.add_argument("--seed", type=int, default=20260825)
     args = ap.parse_args()
     rng = random.Random(args.seed)
@@ -79,7 +79,7 @@ def main() -> None:
 
     # --- 2. Noise floor ---------------------------------------------------------
     print("\nNoise floor: mean cross-batch drift by temperature")
-    manifest = sorted(glob.glob(str(REPO / "results/real/temperature-multi-*-manifest.json")))[-1]
+    manifest = sorted(glob.glob(str(REPO / "results/real/measurement/temperature-multi-*-manifest.json")))[-1]
     cells = json.loads(pathlib.Path(manifest).read_text())["cells"]
     for t in temps:
         d = [c["cross_batch_drift"] for c in cells if c["temperature"] == t and c.get("n")]

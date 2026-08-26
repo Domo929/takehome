@@ -87,7 +87,7 @@ def main() -> None:
     print("Recomputed from committed raw data. No new requests.\n")
 
     # --- Grounding, paired (section 0c) -----------------------------------------
-    f = latest("results/real/grounding-*.jsonl")
+    f = latest("results/real/measurement/grounding-*.jsonl")
     if f:
         rows = [json.loads(line) for line in f.read_text().splitlines() if line]
         pairs: dict[str, dict] = {}
@@ -116,7 +116,7 @@ def main() -> None:
         print()
 
     # --- Production unit, unpaired arms (section 0d) -----------------------------
-    f = latest("results/real/production-unit-*.jsonl")
+    f = latest("results/real/measurement/production-unit-*.jsonl")
     if f:
         rows = [json.loads(line) for line in f.read_text().splitlines() if line]
         g = [r for r in rows if r.get("arm") == "grounded" and "error" not in r]
@@ -162,8 +162,8 @@ def main() -> None:
     # --- Thinking, from per-request records ------------------------------------
     # An earlier version said this could not be bootstrapped because manifests store
     # per-stage totals. The per-request ledgers were there the whole time.
-    off = latest("results/real/think-off-n100-c8.jsonl")
-    dyn = latest("results/real/think-dyn-n100-c8.jsonl")
+    off = latest("results/real/model/think-off-n100-c8.jsonl")
+    dyn = latest("results/real/model/think-dyn-n100-c8.jsonl")
     if off and dyn:
         def rows(p: pathlib.Path) -> list[dict]:
             return [json.loads(x) for x in p.read_text().splitlines() if x]
@@ -180,7 +180,7 @@ def main() -> None:
         print(f"  {'thinking share of output':<44}"
               f"{statistics.fmean(th) / statistics.fmean(ot):>8.1%}")
 
-        verbosity = REPO / "results/real/thinking-verbosity.json"
+        verbosity = REPO / "results/real/model/thinking-verbosity.json"
         if verbosity.exists():
             v = json.loads(verbosity.read_text())
             terse = v.get("terse", {})

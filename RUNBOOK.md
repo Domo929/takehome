@@ -1,7 +1,7 @@
 # Runbook
 
 How to run everything here, and what each piece is. **Why any of it matters, and what
-it found, is in [FINDINGS.md](FINDINGS.md)** — this file deliberately stays out of that
+it found, is in [FINDINGS.md](FINDINGS.md)**. This file deliberately stays out of that
 territory.
 
 ## Setup
@@ -17,13 +17,13 @@ Python 3.12+. k6 and Docker are only needed for the load and observability secti
 
 Two terms used throughout that mean something specific:
 
-**VU (virtual user)** — k6's unit of concurrency. One VU issues a request, waits for
+**VU (virtual user)**, k6's unit of concurrency. One VU issues a request, waits for
 the response, then issues the next, in its own isolated JS runtime. VUs are *not* the
 thing being held constant here: every scenario drives a fixed arrival rate and draws
 VUs from a pool as needed. `dropped_iterations > 0` means the pool ran dry and k6
 could not sustain the offered rate.
 
-**Concurrency** — the Python side's equivalent: how many requests the provider or
+**Concurrency**. The Python side's equivalent: how many requests the provider or
 harness keeps in flight at once. Capped by `provider.parallelism()` in the service.
 
 ## The pieces
@@ -35,7 +35,7 @@ harness keeps in flight at once. Capped by `provider.parallelism()` in the servi
 | `loadtest/k6/service.js` | Load test against our service. |
 | `loadtest/k6/vertex.js` | Load test straight at Vertex, bypassing us. The control. |
 | `loadtest/k6/lib/` | Shared corpus, metrics and auth, so both scripts stay comparable. |
-| `harness/run.py` | In-process experiment driver with a hard spend breaker. Not a load test — see below. |
+| `harness/run.py` | In-process experiment driver with a hard spend breaker. Not a load test, see below. |
 | `mock/fake_vertex.py` | Fake Vertex endpoint. Speaks the real wire contract, costs nothing. |
 | `scripts/` | One-off experiments and reporting. |
 | `observability/` | Prometheus + Grafana, dashboards provisioned from disk. |
@@ -127,8 +127,8 @@ These are mechanical, not advisory:
    exits. Nothing is sent without `--confirm`.
 2. **Pre-flight refusal.** If the estimate already exceeds `--budget-usd`, the run
    refuses to start.
-3. **Runtime breaker.** Accumulated actual spend — from reported `usage_metadata`,
-   never estimated — is checked before every dispatch. When it trips the run drains
+3. **Runtime breaker.** Accumulated actual spend, from reported `usage_metadata`,
+   never estimated, is checked before every dispatch. When it trips the run drains
    and stops. Overshoot is bounded by concurrency × cost-per-request, because
    in-flight requests cannot be recalled.
 4. **`max_output_tokens` is always set.**
@@ -186,9 +186,9 @@ make adaptive-demo                               # adaptive vs fixed, mock only
 | Variable | Default | Meaning |
 |---|---|---|
 | `GEMINI_BACKEND` | `vertex` | `vertex` or `developer` |
-| `GOOGLE_CLOUD_PROJECT` | — | required for Vertex |
+| `GOOGLE_CLOUD_PROJECT` | | required for Vertex |
 | `GOOGLE_CLOUD_LOCATION` | `us-central1` | selects a distinct quota pool |
-| `GOOGLE_API_KEY` | — | required for `developer` |
+| `GOOGLE_API_KEY` | | required for `developer` |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | |
 | `GEMINI_THINKING_BUDGET` | `0` | `-1` is dynamic |
 | `GEMINI_MAX_OUTPUT_TOKENS` | `1024` | |
@@ -209,7 +209,7 @@ git archive --format=zip -o submission.zip HEAD
 
 Exports tracked files at HEAD and nothing else. Notably it excludes `.git`, which
 matters because a working clone accumulates local refs and dangling objects that were
-never part of any branch — `.env.local` among them. Zipping the directory would ship
+never part of any branch, `.env.local` among them. Zipping the directory would ship
 those; `git archive` cannot.
 
 Verify before sending:
@@ -223,20 +223,20 @@ cd /tmp/check && python -m venv .venv && .venv/bin/pip install -r requirements.t
 
 ## Troubleshooting
 
-**`GOOGLE_CLOUD_PROJECT is required`** — Vertex needs a project. Set it or pass
+**`GOOGLE_CLOUD_PROJECT is required`**, Vertex needs a project. Set it or pass
 `project=`.
 
-**403 from Vertex** — run `make vertex-check`; it isolates which of API enablement,
+**403 from Vertex**, run `make vertex-check`; it isolates which of API enablement,
 IAM role or ADC is missing.
 
-**Service returns 503** — deliberate. Capacity is `provider.parallelism()`; the
-service sheds rather than queues.
+**Service returns 503.** That is deliberate. Capacity is `provider.parallelism()`, and
+the service sheds rather than queues.
 
-**`dropped_iterations > 0` in a k6 summary** — k6 could not sustain the offered rate,
+**`dropped_iterations > 0` in a k6 summary**, k6 could not sustain the offered rate,
 so every latency number in that run understates real load. Raise `MAX_VUS`.
 
-**Grafana shows no data** — Prometheus scrapes the service on :9464 and k6 pushes via
+**Grafana shows no data**, Prometheus scrapes the service on :9464 and k6 pushes via
 remote write. Check `make obs-logs`.
 
-**Port already in use after stopping a service** — the process may still be draining.
+**Port already in use after stopping a service**. The process may still be draining.
 Check with `ss -lptn 'sport = :8000'`.

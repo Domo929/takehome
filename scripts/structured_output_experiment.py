@@ -205,7 +205,7 @@ async def main() -> None:
     ap.add_argument("--project", default="evertune-tests")
     ap.add_argument("--location", default="us-central1")
     ap.add_argument("--budget-usd", type=float, default=1.00)
-    ap.add_argument("--out", default="results/real/structured-output")
+    ap.add_argument("--out", default="results/real/measurement/structured-output")
     ap.add_argument("--base-url", default=None)
     ap.add_argument("--yes", action="store_true")
     args = ap.parse_args()

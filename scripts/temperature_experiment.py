@@ -229,7 +229,7 @@ async def main() -> None:
     ap.add_argument("--model", default="gemini-2.5-flash")
     ap.add_argument("--max-output-tokens", type=int, default=1024)
     ap.add_argument("--budget-usd", type=float, default=1.20)
-    ap.add_argument("--out", default="results/real/temperature-multi")
+    ap.add_argument("--out", default="results/real/measurement/temperature-multi")
     ap.add_argument("--base-url", default=None, help="Point at the mock to validate.")
     ap.add_argument("--yes", action="store_true")
     args = ap.parse_args()
