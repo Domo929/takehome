@@ -228,8 +228,15 @@ def main() -> int:
     check("discordant pairs", len(tr["discordant_pairs"]), 0)
     check("truncation with tool", tc["tool_attached"]["truncated"], 22)
     check("truncation without", tc["no_tool"]["truncated"], 2)
-    verb = tc["tool_attached"]["mean_answer_chars"] / tc["no_tool"]["mean_answer_chars"]
-    check("verbosity multiplier", round(verb, 1), 2.4, tol=0.05)
+    # Two multipliers, because chars and tokens disagree and only one is billed.
+    verb_chars = tc["tool_attached"]["mean_answer_chars"] / tc["no_tool"]["mean_answer_chars"]
+    check("verbosity multiplier, chars", round(verb_chars, 2), 2.42, tol=0.01)
+    tr_rec = json.loads(sorted(REPO.glob("results/real/measurement/tool-refusal-*-records.json"))[-1].read_text())
+    tok = {
+        k: statistics.mean(r["output_tokens"] for r in v if "error" not in r)
+        for k, v in tr_rec.items()
+    }
+    check("verbosity multiplier, tokens", round(tok["tool_attached"] / tok["no_tool"], 2), 2.25, tol=0.01)
 
     print("\nDocument hygiene")
     text = FINDINGS.read_text()

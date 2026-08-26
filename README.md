@@ -43,10 +43,10 @@ Grafana at http://localhost:3000, folder *Takehome*.
 Six things that changed what I'd build. All of it, with the data, is in
 **[FINDINGS.md](FINDINGS.md)**.
 
-**Grounding is the measurement, and it's ~99% of the bill.** Evertune runs each prompt
+**Grounding is the measurement, and it's 97% of the bill.** Evertune runs each prompt
 with live search off, then on, and the gap is the product. A grounded request costs 95x
-an ungrounded one on a separate per-prompt SKU. Which means most token optimisations
-Batch, caching, even switching to a cheaper model, work on about 1% of the spend.
+an ungrounded one on a separate per-prompt SKU. Which means every token optimisation,
+Batch, caching, thinking off, fights over the remaining 3%.
 
 **`temperature=0` can't express a brand share.** Across 11 categories, not one brand in
 103 landed between a 10% and 90% mention rate. Every brand reads as always-named or

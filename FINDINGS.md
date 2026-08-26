@@ -41,7 +41,9 @@ find our own bottlenecks for free, and injected failures that a real vendor won'
 produce on demand.
 
 **Then point it at Vertex.** Sustained soaks and a concurrency sweep to find where the
-ceiling actually is, and whether it belongs to us or to Google.
+ceiling actually is, and whether it belongs to us or to Google. It turned out to be ours,
+and it took two more experiments and a careful read of Google's quota documentation to
+establish that properly.
 
 ---
 
@@ -323,8 +325,9 @@ Zero refusals either way. With 50 samples and nothing observed, the 95% upper bo
 the true rate is about 6%, so a common effect is ruled out. A rare one isn't, and I'd
 rather say that than claim the question is closed.
 
-The rest of the table is the real result. Attaching the tool makes the model **2.3x more
-verbose**, and truncation goes from 4% to 44%. That's a much bigger operational problem
+The rest of the table is the real result. Attaching the tool makes the model **2.25x more
+verbose in billed tokens** (2.42x in characters, and tokens are what you pay for), and
+truncation goes from 4% to 44%. That's a much bigger operational problem
 than a refusal would have been, and it's the same finding as the earlier grounding run,
 now on a second sample. The grounded arm needs a larger output cap, not the same one.
 
@@ -568,9 +571,11 @@ declined a question it answers freely otherwise:
 > however, record any brands you are considering, along with your sentiment toward them."
 
 `finish_reason=STOP`, no safety block. It reinterpreted its role around the tool it was
-given. That's a single observation and I'm not claiming a rate, but tool presence
-changing *what the model will say* rather than just how it formats would be a serious
-confound for a product whose measurement is the answer content.
+given. Tool presence changing *what the model will say* rather than just how it formats
+would be a serious confound for a product whose measurement is the answer content, so I
+went and tested it: 50 paired prompts, zero refusals in either arm. It did not replicate,
+and section 2 has the numbers. What that run did find is that attaching the tool makes
+answers 2.25x longer in billed tokens, which is a real problem and a different one.
 
 ---
 
@@ -684,6 +689,13 @@ one loop can serve is queueing with extra steps.
 
 **Scale by processes, not by concurrency.** `parallelism()` at 128 is per process.
 
+A second experiment in section 4 reaches the same conclusion by a different route: the
+Python harness with no service in the middle, driven directly rather than through k6,
+got 67 rps from one process and 307 from four at the same total concurrency. Different
+rig, different load generator, same answer. Two independent measurements agreeing is
+worth more here than either one alone, because the shared-capacity control in this
+experiment is the kind of thing that is easy to get subtly wrong.
+
 ### An instrumentation bug that blamed our own code
 
 Worth including because the number was convincing and wrong.
@@ -715,7 +727,7 @@ component doing the retrying.
 
 ## 4. What I learned pointing it at Vertex
 
-### It holds 37 rps for 21 minutes without drama
+### It runs for 21 minutes without drama
 
 `evertune-tests`/us-central1, concurrency 64, thinking off, 512-token cap
 (`results/real/capacity/vertex-soak-long-*`):
@@ -731,10 +743,12 @@ component doing the retrying.
 Two independent runs agreeing to three significant figures on truncation, and within 7%
 on retry rate, is the part I'd stake a production decision on.
 
-One caveat I want to be honest about: both runs happened on the same afternoon. I later
-re-ran the same configuration overnight 32 hours later and got 31.9 rps against 36.9, so
-there is real run-to-run variation and 37 rps is not a planning number. The section below
-on that off-peak probe explains why the variation isn't what I first assumed it was.
+**The throughput number is not that part.** 37 rps is what one Python process holding 64
+requests in flight produces against a 1.4 second backend. It is a fact about my client
+and my choice of concurrency, not a limit Vertex imposed, and later sections take that
+apart properly: an off-peak re-run 32 hours later gave 31.9 rps, and k6 against the same
+endpoint sustained 550. Read the table for stability and error behaviour. Everything it
+implies about capacity is answered further down.
 
 Quota is enforced per minute and a cold connection pool takes tens of seconds to warm,
 so both facts set a floor on how long a capacity test has to run. Sub-minute runs
@@ -745,23 +759,31 @@ are the norm and they systematically flatter the system.
 batch workload; anything with a tail SLA wants provisioned throughput instead of shared
 quota.
 
-### Vertex does rate limit, and hand-rolled retries are why we can see it
+### Retries are rare, visible, and not what I first said they were
 
-Nine requests needed a retry in the first soak, 24 in the second. Not one surfaced to a
-caller.
+Nine requests needed a second attempt in the first soak, 24 in the second. All 33
+eventually succeeded and not one surfaced to a caller.
 
-That's the payoff for a decision made early on principle. `llm/retry.py` does retries in
-our own code rather than delegating to the SDK's `HttpRetryOptions`, specifically so
-retried failures stay visible to instrumentation. With SDK retries enabled those 24 would
-have been invisible, and the conclusion would have been the flattering, false "Vertex
-never rate limits us."
+I originally headed this section "Vertex does rate limit," which the data does not
+support. **No run in this document recorded a single 429**, across roughly 97,000 requests
+spanning three soaks, a concurrency sweep and the k6 ceiling run. Those 33 retries are
+transient failures of some kind, and the honest statement is that the per-request records
+capture the retry count but not the reason, so I can't name it. That's a gap in my
+instrumentation, not evidence about Google.
+
+What the number does support is the design decision behind it. `llm/retry.py` retries in
+our own code rather than delegating to the SDK's `HttpRetryOptions`, so retried failures
+stay visible to instrumentation. With SDK retries enabled, those 33 would have been
+invisible and the run would have looked perfectly clean. A 0.05% retry rate is a small
+thing to know, but not knowing it is how a slow upstream degradation hides until it is
+big enough to page someone. The fix for next time is one field: record the error class
+that triggered each retry, not just the count.
 
 The error taxonomy covers more than the obvious codes. **499 (`CANCELLED`) maps to a
 retryable server error**, not a client error. Despite sitting in the 4xx range, it means
 upstream shed the connection rather than that we sent something invalid. Treating it as
-a 4xx would fail the request permanently on a condition that's worth another attempt. I
-didn't hit it at 37 rps, but it's the kind of thing that only shows up at rates well
-past what I ran.
+a 4xx would fail the request permanently on a condition worth another attempt. I never
+saw one, so that mapping is reasoning from the spec rather than from measurement.
 
 ### Our client peaks at 128 concurrent, and past it the bottleneck is us
 
@@ -1401,7 +1423,7 @@ zero-priced serverless models. Cost isn't the reason I stopped.
 Two things are. Together has **no first-party web search**, which I checked rather than
 assumed: their own documentation for building a search-augmented app wires in a
 third-party search API and passes the results into the prompt. So the arm that carries
-99% of the bill and most of the interesting behaviour has no counterpart there. Any
+97% of the bill and most of the interesting behaviour has no counterpart there. Any
 comparison I ran would be ungrounded against ungrounded, which is the cheap half of the
 measurement and the half least likely to differ operationally.
 
