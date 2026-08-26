@@ -15,11 +15,7 @@ Total spend on `evertune-tests`: **$55.44 across 128,494 requests**. Run
 
 ---
 
-## What this was run on, and what wrote it
-
-Both matter for reading the numbers, so they go first rather than in a footnote.
-
-### The machine
+## Environment
 
 | | |
 |---|---|
@@ -28,47 +24,15 @@ Both matter for reading the numbers, so they go first rather than in a footnote.
 | OS | Fedora Linux 44, kernel 7.1.8 |
 | Python | 3.14.7, `google-genai` 2.19.0 |
 | Load generator | k6 v2.2.0 |
-| Network to `us-central1` | **8.8 ms** RTT, 0% loss |
-
-One laptop. That is the most important limitation in this document, because **the load
-generator, the service under test and the fake Vertex endpoint all shared those 16
-threads.** Any run where our own code was the bottleneck was measured on hardware that
-was also generating the load against it.
-
-Two things keep that from invalidating the capacity work. The rig was calibrated
-separately: k6 delivers a 4,000 rps schedule against the mock with zero dropped
-iterations, so at the rates used here it was not the constraint. And every run reports
-`dropped_iterations`, which is the signal that the generator fell behind. It is zero
-everywhere.
-
-The 8.8 ms RTT is worth keeping in mind too. It bounds the network share of latency at
-well under 1% of a typical 1.4-second response, so nothing here is measuring my
-broadband.
-
-### The models
-
-The work was done with AI assistance and it would be strange to write 16,000 words about
-measuring language models while being vague about that.
+| Network to `us-central1` | 8.8 ms RTT, 0% loss |
+| Host layout | k6, the service and the mock all ran on this one machine |
 
 | | |
 |---|---|
-| Implementation, experiments, this write-up | **Claude Opus 5** |
-| Adversarial review of the code and the document | **Gemini 3 Pro**, plus a second Opus 5 pass |
+| Implementation, experiments, write-up | Claude Opus 5 |
+| Adversarial review | Gemini 3 Pro, plus a second Opus 5 pass |
 | Period | 3 working days, 69 commits |
-| Result | 128 files, ~34,400 lines |
-
-What that means in practice: I chose the experiments, decided what was worth measuring
-and what the results meant, and every number came off a real API. The AI wrote most of
-the code and most of the prose, and it also found things I had missed. The tool-refusal
-question, the entity-resolution bug in the brand table and the SIGTERM handler that
-silently broke shutdown all came out of adversarial review rather than from me.
-
-It cuts the other way too. Several of the corrections in Appendix B are AI-generated
-errors I had to catch: a cost model quietly built on a sample I had already retired, a
-bootstrap that was not reproducible because it iterated a set, a confidence table
-silently truncated to its top 8 rows. That is the honest shape of the collaboration, and
-it is why `make verify` exists. **A document written this way needs to be checkable by
-machine, because reading it again is not enough.**
+| Diff against the provided repo | 128 files, ~34,400 lines |
 
 ---
 
@@ -78,7 +42,6 @@ It is a long document, so here is the map. The left column is the brief.
 
 | You asked for | It's in |
 |---|---|
-| (not asked, but you should know) | [What this was run on, and what wrote it](#what-this-was-run-on-and-what-wrote-it) |
 | How the integration behaves under realistic load | [4. Pointing it at Vertex](#4-what-i-learned-pointing-it-at-vertex), and [3](#3-what-i-learned-load-testing-our-own-code) for our own code first |
 | Quirks and failure modes of this model | [1. What I learned about the model](#1-what-i-learned-about-the-model) |
 | Parameters that mattered | Thinking budget and output cap in [1](#1-what-i-learned-about-the-model), temperature in [2](#2-what-i-learned-about-the-measurement) |
@@ -291,11 +254,10 @@ my time went.
 
 **`response.choices[0].message.content` is a string. Gemini's answer is a list that can
 be empty on a 200.** The text lives in `candidates[0].content.parts[]` and has to be
-joined. A response can arrive with HTTP 200, no error, and no parts at all. The SDK's
-`.text` convenience property *raises* on some blocked payloads rather than returning
-empty, so the happy path has two distinct ways to produce nothing while looking fine.
-This is the single biggest structural difference, and it is why the provider raises
-`LLMEmptyResponseError` instead of handing callers a `None` they did not ask for.
+joined, and a response can arrive with 200, no error and no parts at all. The SDK's
+`.text` property *raises* on some blocked payloads rather than returning empty, so the
+happy path has two ways to produce nothing while looking fine. Hence
+`LLMEmptyResponseError` rather than a `None` the caller never asked for.
 
 **`response.usage.completion_tokens` is one number. Gemini has two, and the bill is the
 sum.** `candidates_token_count` is the obvious analogue, and it is the wrong one:
@@ -693,12 +655,10 @@ That reproduces. For a proportion at n=100 the 95% margin of error is:
 | 30% | +/- 9.0 points |
 | 50% | **+/- 9.8 points** |
 
-So "about 6 points" is right for a brand sitting near 10%, which is where most brands in
-a crowded category sit. The number to keep in mind is that it roughly doubles in the
-middle of the range. A brand at 50% carries +/- 10 points at n=100, and two brands 8
-points apart there are not distinguishable. That isn't an argument for more samples,
-n=400 would only halve it, and the cost scales linearly while the error scales with the
-square root. It's an argument for reporting the interval next to the number.
+So "about 6 points" holds for a brand near 10%, where most brands in a crowded category
+sit. It roughly doubles in the middle of the range: at 50% the margin is +/- 10 points, so
+two brands 8 points apart are not distinguishable. More samples won't fix that, since cost
+scales linearly and error with the square root. Report the interval instead.
 
 Which is the thread back to temperature. At temperature 0 the margin of error collapses
 toward zero, because every brand lands at 0% or 100% and repeated sampling returns the
@@ -771,11 +731,10 @@ validated on both. Grounding is where a schema would help most, and it is the on
 it cannot go.
 
 On the ungrounded arm it works and mostly delivers. Extraction is 100% either way, but
-structure costs **1.54x output tokens**. The truncation claim holds with a catch: at a
-200-token cap prose truncated 0 of 10 while schema truncated 5 of 10, JSON is more
-verbose, so it hits the cap sooner. But all 5 were *detected*, because the JSON failed
-to parse. You're trading rare silent failures for more frequent loud ones, and the cap
-needs to rise about 1.5x.
+structure costs **1.54x output tokens**, so it hits the cap sooner: at 200 tokens, prose
+truncated 0 of 10 and schema 5 of 10. All 5 were *detected* though, because the JSON
+failed to parse. That's rare silent failures traded for frequent loud ones, and a cap
+that needs to rise about 1.5x.
 
 One thing I wasn't looking for. The tool in question was a single function declaration,
 `record_brands`, described as "Record the brands mentioned, with sentiment", taking an
@@ -792,11 +751,11 @@ the tool's job description as its own role. "Record the brands mentioned" became
 thing it does, and answering the question became something it does not.
 
 `finish_reason=STOP`, no safety block. It reinterpreted its role around the tool it was
-given. Tool presence changing *what the model will say* rather than just how it formats
-would be a serious confound for a product whose measurement is the answer content, so I
-went and tested it: 50 paired prompts, zero refusals in either arm. It did not replicate,
-and section 2 has the numbers. What that run did find is that attaching the tool makes
-answers 2.25x longer in billed tokens, which is a real problem and a different one.
+given. Tool presence changing *what the model says* rather than how it formats would be a
+serious confound for a product measured on answer content, so I tested it: 50 paired
+prompts, zero refusals either arm. It didn't replicate. What that run did find is that
+attaching the tool makes answers **2.25x longer in billed tokens**, which is a real
+problem and a different one. Section 2 has the numbers.
 
 ---
 
@@ -909,12 +868,10 @@ one loop can serve is queueing with extra steps.
 
 **Scale by processes, not by concurrency.** `parallelism()` at 128 is per process.
 
-A second experiment in section 4 reaches the same conclusion by a different route: the
-Python harness with no service in the middle, driven directly rather than through k6,
-got 67 rps from one process and 307 from four at the same total concurrency. Different
-rig, different load generator, same answer. Two independent measurements agreeing is
-worth more here than either one alone, because the shared-capacity control in this
-experiment is the kind of thing that is easy to get subtly wrong.
+Section 4 reaches the same conclusion by another route: the Python harness with no
+service in the middle got 67 rps from one process and 307 from four, at the same total
+concurrency. Different rig, different generator, same answer. Worth more than either
+alone, because the held-capacity control here is easy to get subtly wrong.
 
 ### An instrumentation bug that blamed our own code
 
@@ -964,11 +921,10 @@ Two independent runs agreeing to three significant figures on truncation, and wi
 on retry rate, is the part I'd stake a production decision on.
 
 **The throughput number is not that part.** 37 rps is what one Python process holding 64
-requests in flight produces against a 1.4 second backend. It is a fact about my client
-and my choice of concurrency, not a limit Vertex imposed, and later sections take that
-apart properly: an off-peak re-run 32 hours later gave 31.9 rps, and k6 against the same
-endpoint sustained 550. Read the table for stability and error behaviour. Everything it
-implies about capacity is answered further down.
+in flight produces against a 1.4-second backend: a fact about my client and my choice of
+concurrency, not a limit Vertex imposed. An off-peak re-run gave 31.9, and k6 against the
+same endpoint sustained 550. Read the table for stability and error behaviour; capacity is
+answered further down.
 
 Quota is enforced per minute and a cold connection pool takes tens of seconds to warm,
 so both facts set a floor on how long a capacity test has to run. Sub-minute runs
@@ -990,13 +946,11 @@ What those 33 were, I can't say: the per-request records capture the retry count
 the reason. That's a gap in my instrumentation rather than a fact about Google, and the
 fix is one field.
 
-What the number does support is the design decision behind it. `llm/retry.py` retries in
-our own code rather than delegating to the SDK's `HttpRetryOptions`, so retried failures
-stay visible to instrumentation. With SDK retries enabled, those 33 would have been
-invisible and the run would have looked perfectly clean. A 0.05% retry rate is a small
-thing to know, but not knowing it is how a slow upstream degradation hides until it is
-big enough to page someone. The fix for next time is one field: record the error class
-that triggered each retry, not just the count.
+What it does support is the design decision behind it. `llm/retry.py` retries in our own
+code rather than delegating to the SDK's `HttpRetryOptions`, so retries stay visible to
+instrumentation. With SDK retries on, those 33 would have been invisible and the run would
+have looked perfectly clean. A 0.05% retry rate is a small thing to know, but not knowing
+it is how slow upstream degradation hides until it pages someone.
 
 The error taxonomy covers more than the obvious codes. **499 (`CANCELLED`) maps to a
 retryable server error**, not a client error. Despite sitting in the 4xx range, it means
@@ -1165,12 +1119,10 @@ handshake path fell over at c=256, not because Vertex pushed back.
 
 ### So I pointed k6 at Vertex and went looking for the wall
 
-Our Python client can't answer this question. One event loop saturates its TLS path
-around 128 requests in flight, so it tops out near 74 rps and stops. k6 is Go, holds
-thousands of concurrent requests without breaking a sweat, and talks to Vertex directly
-with no service in the middle. That control arm was in the repo from the start. It had
-only ever run as a ten-request smoke test, which is a fair criticism of the work rather
-than of the tool.
+Our Python client can't answer this. One event loop saturates its TLS path around 128 in
+flight, tops out near 74 rps, and stops. k6 is Go, holds thousands concurrent, and talks
+to Vertex directly with no service in between. That control arm was in the repo from the
+start and had only ever run as a ten-request smoke test.
 
 A ramp to 550 requests per second, output capped at 64 tokens so the bill stayed bounded,
 `evertune-tests`/us-central1 (`results/real/capacity/k6-vertex-ceiling.json`):
@@ -1443,25 +1395,23 @@ machine, only the number of processes changes
 process turned in 74 to 78 rps, which is the single-process c=128 figure repeated four
 times. It scales linearly because nothing is shared.
 
-So the constraint is one Python process's event loop, and it has two parts. TLS crypto is
-CPU work on that loop and costs about half the usable concurrency. Underneath that, the
-loop itself runs out of dispatch capacity somewhere past 256 in flight, TLS or not. Both
-are per process, and Python runs one thread of bytecode at a time, so neither is fixed by
-threads or bigger connection pools. The pool experiment already showed that: it sat at
-50% while throughput collapsed.
+So the constraint is one Python event loop, in two parts. TLS crypto is CPU work on that
+loop and costs about half the usable concurrency. Underneath, the loop runs out of
+dispatch capacity past 256 in flight, TLS or not. Both are per process, so neither is
+fixed by threads or a bigger pool. The pool experiment showed that already: 50% utilised
+while throughput collapsed.
 
 The number to plan with is **roughly 74 rps per process against Vertex**. Want 550? That's
 about 8 processes, and the earlier worker test agrees. Vertex has already shown it will
 take that and more from a single machine.
 
-That also settles the adaptive limiter, and for a better reason than "we never saw a
-429." Google's own guidance for this tier is exponential backoff, traffic smoothing, and
-the global endpoint. A gradient controller that infers a capacity ceiling from latency is
-solving a problem the vendor says isn't shaped that way: contention is transient, the
-limit is measured in tokens per minute, and a sharp ramp trips an acceleration limiter
-that has nothing to do with capacity. Retry with backoff and admission control are already
-in the provider. The limiter stays off, and if throughput is ever the issue the answer is
-more processes, not a cleverer client.
+That also settles the adaptive limiter, for a better reason than "we never saw a 429."
+A controller that infers a capacity ceiling from latency solves a problem the vendor says
+isn't shaped that way: contention is transient, the limit is tokens per minute, and a
+sharp ramp trips an acceleration limiter unrelated to capacity. Google's guidance here is
+backoff, traffic smoothing and the global endpoint, and the provider already does the
+first. The limiter stays off. If throughput is ever the issue, the answer is more
+processes.
 
 ---
 
@@ -1556,12 +1506,12 @@ that table, because both sides scale linearly and the per-prompt SKU dominates. 
 conclusion holds whatever the real prompt count turns out to be, which is the useful
 thing about it.
 
-One number is worth sitting with. If the entire grounded arm ran through the paid
-grounding SKU at a million requests a day, that's **$12.8M a year**, against a company
-that has raised about $20M. So either the real per-model volume is well below that, or
-the search-augmented layer is sourced somewhere other than the billed grounding API.
-Evertune's own methodology writing points at the second: it describes the search layer as
-coming from consumer app surfaces and the API as the way to isolate base-model knowledge.
+One number stands out. The entire grounded arm through the paid SKU at a million
+requests a day is **$12.8M a year**, against a company that has raised about $20M. So
+either real per-model volume is well below that, or the search-augmented layer is sourced
+elsewhere. Evertune's own methodology writing points at the second, describing the search
+layer as coming from consumer app surfaces and the API as the way to isolate base-model
+knowledge.
 
 That matters for this integration. If Vertex grounding is only ever used for the
 foundational arm, or for spot checks rather than the full 100 samples, the cost picture in
@@ -1661,13 +1611,11 @@ reasonable call to make differently and it's about one line of config away.
 
 Ordered by what would actually change an outcome.
 
-**Pin temperature and re-baseline once.** The code now uses 1.0, but historical brand
-shares were collected at 0.7. Comparing the two settings across 157 category/brand
-pairs, 7 move by more than their own 95% noise band and the largest is 28 points
-(Ducky, mechanical keyboards). Most brands do not move, so this is not a wholesale
-shift, but a stored series spanning the change will show real steps on some brands that
-are config artifacts rather than market moves. One re-baseline run per tracked prompt, then freeze the value and
-record it with every result.
+**Pin temperature and re-baseline once.** The code now uses 1.0; historical shares were
+collected at 0.7. Across 157 category/brand pairs, 7 move by more than their own 95%
+noise band, the largest by 28 points. Not a wholesale shift, but a stored series spanning
+the change shows real steps on those brands that are config artifacts, not market moves.
+One re-baseline run per prompt, then freeze the value and record it with every result.
 
 **Resolve grounding redirects at collection time.** Citation URLs are per-request signed
 tokens that expire. Resolving them at collection time is the only option. Skip it and
@@ -1696,13 +1644,11 @@ a `usable: false` flag so a caller can tell, but the policy question is still op
 belongs to whoever owns the pipeline. Dropping them reduces the sample count silently;
 keeping them lets a fragment like `"iRobot,"` count as a mention.
 
-**Run more than one process, and size it from the token baseline.** One process holds
-about **74 rps** against Vertex. Four processes gave 307 rps in a controlled test, scaling
-linearly because nothing is shared. The published Tier 1 token baseline works out to about
-91 rps on the blended production token shape, because grounded answers are 3.9x longer
-than ungrounded ones. So at the entry tier **Google's token budget binds before our
-process count does**, and one process is enough. That is the number to size against, not
-a load test. At Tier 3 it takes about 6 processes.
+**Size from the token baseline, not a load test.** One process holds about **74 rps**;
+four gave 307, scaling linearly because nothing is shared. But Tier 1's token baseline
+works out to 91 rps on the blended production shape, since grounded answers are 3.9x
+longer. So at the entry tier **Google's budget binds before our process count does** and
+one process is enough. Tier 3 takes about six.
 
 **Move to the global endpoint.** Google's published throughput baselines are quoted for
 it, it routes to whichever region has capacity, and the small region comparison here
@@ -1737,11 +1683,10 @@ counts costs about four cents on Llama 3.3 70B, or nothing at all on one of thei
 zero-priced serverless models. Cost isn't the reason I stopped.
 
 Two things are. Together has **no first-party web search**, which I checked rather than
-assumed: their own documentation for building a search-augmented app wires in a
-third-party search API and passes the results into the prompt. So the arm that carries
-97% of the bill and most of the interesting behaviour has no counterpart there. Any
-comparison I ran would be ungrounded against ungrounded, which is the cheap half of the
-measurement and the half least likely to differ operationally.
+assumed: their own docs for building a search-augmented app wire in a third-party search
+API. So the arm carrying 97% of the bill has no counterpart there, and any comparison
+would be ungrounded against ungrounded, the cheap half and the half least likely to
+differ.
 
 The second is a scope judgement. Evertune tracks 11+ models and treats each as its own
 target, so "how does Llama answer this" is a question about their product surface, not
@@ -1889,12 +1834,11 @@ figure up 40%. The same call confirmed all four token rates to the cent. The
 authoritative source cost less to consult than the approximation cost to hedge. It's now
 `scripts/verify_pricing.py` and it exits non-zero on a mismatch.
 
-**The Anker row.** The brand table reported Anker down 15 points when grounded, and one
-sentence earlier I'd noted that Anker's vacuums are sold as Eufy. Resolving the product
-line to its parent turns that into **up 34**. Spotting a relationship and not applying it
-is the failure mode, and it produces a number that is confidently wrong rather than
-obviously broken. That one is in section 2 with the data, because it says something about
-the measurement rather than about me.
+**The Anker row.** The table reported Anker down 15 points when grounded, one sentence
+after noting that Anker's vacuums are sold as Eufy. Resolving the product line to its
+parent makes it **up 34**. Spotting a relationship and not applying it produces a number
+that is confidently wrong rather than obviously broken. It's in section 2 with the data,
+because it says something about the measurement.
 
 ## What that changed about the tooling
 
