@@ -15,12 +15,70 @@ Total spend on `evertune-tests`: **$55.44 across 128,494 requests**. Run
 
 ---
 
+## What this was run on, and what wrote it
+
+Both matter for reading the numbers, so they go first rather than in a footnote.
+
+### The machine
+
+| | |
+|---|---|
+| CPU | AMD Ryzen AI 7 350, 8 cores / 16 threads, boost 5.09 GHz |
+| Memory | 30 GB |
+| OS | Fedora Linux 44, kernel 7.1.8 |
+| Python | 3.14.7, `google-genai` 2.19.0 |
+| Load generator | k6 v2.2.0 |
+| Network to `us-central1` | **8.8 ms** RTT, 0% loss |
+
+One laptop. That is the most important limitation in this document, because **the load
+generator, the service under test and the fake Vertex endpoint all shared those 16
+threads.** Any run where our own code was the bottleneck was measured on hardware that
+was also generating the load against it.
+
+Two things keep that from invalidating the capacity work. The rig was calibrated
+separately: k6 delivers a 4,000 rps schedule against the mock with zero dropped
+iterations, so at the rates used here it was not the constraint. And every run reports
+`dropped_iterations`, which is the signal that the generator fell behind. It is zero
+everywhere.
+
+The 8.8 ms RTT is worth keeping in mind too. It bounds the network share of latency at
+well under 1% of a typical 1.4-second response, so nothing here is measuring my
+broadband.
+
+### The models
+
+The work was done with AI assistance and it would be strange to write 16,000 words about
+measuring language models while being vague about that.
+
+| | |
+|---|---|
+| Implementation, experiments, this write-up | **Claude Opus 5** |
+| Adversarial review of the code and the document | **Gemini 3 Pro**, plus a second Opus 5 pass |
+| Period | 3 working days, 69 commits |
+| Result | 128 files, ~34,400 lines |
+
+What that means in practice: I chose the experiments, decided what was worth measuring
+and what the results meant, and every number came off a real API. The AI wrote most of
+the code and most of the prose, and it also found things I had missed. The tool-refusal
+question, the entity-resolution bug in the brand table and the SIGTERM handler that
+silently broke shutdown all came out of adversarial review rather than from me.
+
+It cuts the other way too. Several of the corrections in Appendix B are AI-generated
+errors I had to catch: a cost model quietly built on a sample I had already retired, a
+bootstrap that was not reproducible because it iterated a set, a confidence table
+silently truncated to its top 8 rows. That is the honest shape of the collaboration, and
+it is why `make verify` exists. **A document written this way needs to be checkable by
+machine, because reading it again is not enough.**
+
+---
+
 ## Where to find what you asked for
 
 It is a long document, so here is the map. The left column is the brief.
 
 | You asked for | It's in |
 |---|---|
+| (not asked, but you should know) | [What this was run on, and what wrote it](#what-this-was-run-on-and-what-wrote-it) |
 | How the integration behaves under realistic load | [4. Pointing it at Vertex](#4-what-i-learned-pointing-it-at-vertex), and [3](#3-what-i-learned-load-testing-our-own-code) for our own code first |
 | Quirks and failure modes of this model | [1. What I learned about the model](#1-what-i-learned-about-the-model) |
 | Parameters that mattered | Thinking budget and output cap in [1](#1-what-i-learned-about-the-model), temperature in [2](#2-what-i-learned-about-the-measurement) |
