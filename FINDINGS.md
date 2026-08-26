@@ -47,7 +47,7 @@ It is a long document, so here is the map. The left column is the brief.
 | Parameters that mattered | Thinking budget and output cap in [1](#1-what-i-learned-about-the-model), temperature in [2](#2-what-i-learned-about-the-measurement) |
 | What surprised me vs other LLMs | [What surprised me, measured against the provider already in this repo](#what-surprised-me-measured-against-the-provider-already-in-this-repo) |
 | Decisions and tradeoffs | [6. Changing the provided contract](#6-changing-the-provided-contract), plus the reasoning inline where each decision was made |
-| Things I tried that didn't work | HTTP/2 in [4](#tls-is-what-costs-us-and-http2-doesnt-fix-it), the adaptive limiter in [4](#adaptive-concurrency-it-works-but-the-premise-is-unproven), structured output in [2](#structured-output-does-not-work-where-it-is-needed-most), context caching in [5](#could-we-pad-the-prompt-to-reach-the-cache-floor) |
+| Things I tried that didn't work | HTTP/2 in [4](#our-client-tops-out-at-74-rps-per-process-and-tls-is-half-of-why), the adaptive limiter in [4](#adaptive-concurrency-it-works-and-it-ships-off), structured output in [2](#structured-output-does-not-work-where-it-is-needed-most), context caching in [5](#could-we-pad-the-prompt-to-reach-the-cache-floor) |
 | What I'd do next in production | [7. What I'd do before production](#7-what-id-do-before-production) |
 | What I'd want to know first | [8. Open questions](#8-open-questions) |
 | The numbers behind all of it | [Appendix A](#appendix-a-evidence-and-how-to-check-it), and `make verify` re-derives all 86 |
@@ -290,8 +290,11 @@ is also why Batch and context caching, the two obvious levers, do nothing here.
 
 Two smaller ones worth recording because they cost me time. One field inside
 `thinkingConfig` serialises in snake_case while every sibling is camelCase, and sending
-both spellings is a hard 400 rather than a merge. And 499 `CANCELLED` has to be treated as
-retryable despite sitting in the 4xx range where client errors live.
+both spellings is a hard 400 rather than a merge. And 499 `CANCELLED` needs a deliberate
+decision: I first classified it retryable on the reasoning that upstream had shed the
+connection, but Google's error table defines it as client cancellation and their retry
+guidance covers only 408, 429 and 5xx. It is terminal by default now, with an override,
+because I never observed one and reasoning against a documented contract is a bad trade.
 
 The through-line: Gemini's failure modes are mostly **HTTP 200 responses that are wrong in
 a way the type system cannot see.** An OpenAI-shaped client ported field by field compiles,
@@ -904,7 +907,14 @@ component doing the retrying.
 
 ## 4. What I learned pointing it at Vertex
 
-### It runs for 21 minutes without drama
+Four things came out of this section, and the rest is evidence for them.
+
+1. Sustained load is boring: 47,677 requests over 21 minutes, 0.05% retries, nothing surfaced to a caller.
+2. **Every throughput number I measured was a fact about our client, not about Vertex.** No run in this document has ever seen a 429.
+3. Our ceiling is one Python event loop, worth about 74 rps per process. TLS costs roughly half of it.
+4. On the real production shape, 100% of served requests produced a usable sample, and what sheds is driven by the grounded latency tail rather than by the mean.
+
+### The soak: stable and unremarkable
 
 `evertune-tests`/us-central1, concurrency 64, thinking off, 512-token cap
 (`results/real/capacity/vertex-soak-long-*`):
@@ -918,50 +928,31 @@ component doing the retrying.
 | Truncation at 512 | 3.3% | **3.3%** |
 
 Two independent runs agreeing to three significant figures on truncation, and within 7%
-on retry rate, is the part I'd stake a production decision on.
+on retry rate. That is the part I would stake a production decision on. **The throughput
+number is not**, for reasons the next section gets to.
 
-**The throughput number is not that part.** 37 rps is what one Python process holding 64
-in flight produces against a 1.4-second backend: a fact about my client and my choice of
-concurrency, not a limit Vertex imposed. An off-peak re-run gave 31.9, and k6 against the
-same endpoint sustained 550. Read the table for stability and error behaviour; capacity is
-answered further down.
+Three operational notes. Quota is enforced per minute and a cold pool takes tens of
+seconds to warm, so sub-minute runs under-report by about 2.5x here; burst-shaped
+benchmarks systematically flatter the system. **p99 is not settled** and should be quoted
+as a range, roughly 3.7 to 9.6 s, which is fine for batch and wrong for a tail SLA. And
+all 33 retries across both runs succeeded on a later attempt without reaching a caller.
 
-Quota is enforced per minute and a cold connection pool takes tens of seconds to warm,
-so both facts set a floor on how long a capacity test has to run. Sub-minute runs
-under-report by about 2.5x here. That's worth stating because burst-shaped benchmarks
-are the norm and they systematically flatter the system.
+Those retries are not rate limits. **No run in this document recorded a single 429**,
+across roughly 97,000 requests spanning three soaks, a concurrency sweep and the k6
+ceiling run. What they were I can't say, because the per-request records capture the retry
+count but not the reason. That is a gap in my instrumentation rather than a fact about
+Google, and the fix is one field.
 
-**p99 is not settled** and should be quoted as a range, roughly 3.7-9.6 s. Fine for a
-batch workload; anything with a tail SLA wants provisioned throughput instead of shared
-quota.
+It does justify the design, though. `llm/retry.py` retries in our own code rather than
+delegating to the SDK's `HttpRetryOptions`, so retries stay visible. With SDK retries on,
+those 33 would have been invisible and the run would have looked perfectly clean. A 0.05%
+retry rate is a small thing to know, but not knowing it is how slow upstream degradation
+hides until it pages someone.
 
-### Retries are rare, visible, and not what I first said they were
+### Our client tops out at ~74 rps per process, and TLS is half of why
 
-Nine requests needed a second attempt in the first soak, 24 in the second. All 33
-eventually succeeded and not one surfaced to a caller.
-
-They are not rate limits. **No run in this document recorded a single 429**, across
-roughly 97,000 requests spanning three soaks, a concurrency sweep and the k6 ceiling run.
-What those 33 were, I can't say: the per-request records capture the retry count but not
-the reason. That's a gap in my instrumentation rather than a fact about Google, and the
-fix is one field.
-
-What it does support is the design decision behind it. `llm/retry.py` retries in our own
-code rather than delegating to the SDK's `HttpRetryOptions`, so retries stay visible to
-instrumentation. With SDK retries on, those 33 would have been invisible and the run would
-have looked perfectly clean. A 0.05% retry rate is a small thing to know, but not knowing
-it is how slow upstream degradation hides until it pages someone.
-
-The error taxonomy covers more than the obvious codes. **499 (`CANCELLED`) maps to a
-retryable server error**, not a client error. Despite sitting in the 4xx range, it means
-upstream shed the connection rather than that we sent something invalid. Treating it as
-a 4xx would fail the request permanently on a condition worth another attempt. I never
-saw one, so that mapping is reasoning from the spec rather than from measurement.
-
-### Our client peaks at 128 concurrent, and past it the bottleneck is us
-
-Vertex us-central1, 25-75 s measured per stage after discarding a warm-up window
-(`results/real/capacity/vertex-knee-*` and `vertex-extreme-*`):
+Vertex us-central1, 25-75 s per stage after discarding warm-up
+(`results/real/capacity/vertex-knee-*`, `vertex-extreme-*`):
 
 | Concurrency | Throughput | rps per unit | p50 | p99 | Event loop lag | Pool |
 |---|---|---|---|---|---|---|
@@ -972,160 +963,70 @@ Vertex us-central1, 25-75 s measured per stage after discarding a warm-up window
 | 256 | 63.0 rps | 0.246 | 1,962 ms | 10,818 ms | **457 ms** | 50% |
 | 1024 | 43.7 rps | 0.043 | 17,557 ms | 49,443 ms | **4,301 ms** | 50% |
 
-Linear to 128. Rps per unit of concurrency holds between 0.50 and 0.58 across a 16x
-range, which is Little's Law behaving (throughput = concurrency / latency, so at a fixed
-latency each extra concurrent request should buy a fixed amount of throughput). p50
-actually *improves* up to 128.
+Linear to 128, then it collapses: at 1024, throughput is below the c=64 level, p50 is 13x
+worse, and pushing 8x harder than the optimum delivers 40% less work.
 
-Flat latency across a 16x range is the tell. If Vertex were rationing anything, pushing
-16x more concurrency at it would show up as rising latency or rejections, and neither
-happens. Nothing is saturated in that top half of the table. I'm filling a pipe that has
-spare room at both ends, and the throughput number is whatever I chose for concurrency
-divided by the model's natural response time.
+Flat latency across a 16x range is the tell. If Vertex were rationing anything, 16x more
+concurrency would show up as rising latency or rejections. Neither happens, so nothing is
+saturated in the top half of that table. The last column explains the collapse: the pool
+sat at 50% throughout (raised to 2,048 so it couldn't be the constraint) while event loop
+lag went from under 5 ms to **4.3 seconds**. At c=1024, a quarter of the 17.5 s p50 is our
+own scheduler delay before a request reaches the network. Without
+`llm_event_loop_lag_seconds` that reads as "Vertex collapses under load," which is both
+wrong and the kind of wrong that gets escalated to a vendor.
 
-Then it collapses. At 1024 the throughput is below the c=64 level, p50 is 13x worse, and
-p99 reaches 49 seconds. Pushing 8x harder than the optimum delivers 40% less work.
+Four experiments isolate the cause, three of them free.
 
-The last column explains all of it. The pool sat at 50% throughout, raised to 2,048 so
-it couldn't be the constraint, while event loop lag went from under 5 ms to **4.3
-seconds**. At c=1024, a quarter of the 17.5 s p50 is our own scheduler delay before a
-request reaches the network.
+**TLS costs about half the usable concurrency.** Same client against the mock over plain
+HTTP, latency tuned to match Vertex (`results/real/local/notls-sweep-manifest.json`):
 
-So the answer to "is the ceiling us or them" is neither, and then us. Up to 128 nobody is
-constrained: Vertex isn't pushing back and our client is idle. Past 128 the limit is a
-single Python process, and Vertex still isn't the limiting factor. I never located a
-vendor ceiling anywhere in this table, which the off-peak probe below confirms from a
-different angle.
-
-Without `llm_event_loop_lag_seconds` the c=1024 result reads as "Vertex collapses under
-load," which is both wrong and the kind of wrong that gets escalated to a vendor.
-
-### TLS is what costs us, and HTTP/2 doesn't fix it
-
-If the ceiling is our event loop, what is it busy doing? TLS.
-
-Against a local backend with no TLS, c=1024 loses only 8% of peak throughput. Against
-Vertex the same concurrency loses 41%. Same client, same code. The difference is
-encryption work on the event loop.
-
-HTTP/2 multiplexes many requests over a few connections, so it should help. It fixed the
-symptom precisely: **event loop lag went from 4,301 ms to 2 ms.** That confirms the
-diagnosis.
-
-But throughput got worse, 55.2 rps at c=1024 against 73.7 at c=128 on HTTP/1.1. Fewer
-connections means less parallelism at the transport layer, and that costs more than the
-handshakes save.
-
-Negative result, shipped off by default behind `GEMINI_HTTP2`. It stays in the repo
-because it's the evidence for the TLS diagnosis, not because I recommend it.
-
-### Adaptive concurrency: it works, but the premise is unproven
-
-`parallelism()` returning a constant assumes capacity is something discovered once.
-Vertex uses Dynamic Shared Quota, which publishes no per-project ceiling and is
-documented as moving with regional demand, so on paper any constant has a shelf life.
-That was the reasoning. Whether it survives contact with measurement is the next
-section.
-
-I built a gradient limiter that keys on **latency** rather than error codes, because
-Vertex often doesn't reject excess load. It just slows down. A controller watching only
-429s sees a healthy service and keeps climbing.
-
-Three configurations against a mock whose capacity collapses mid-run and then recovers
-(`results/real/local/adaptive-experiment.txt`):
-
-| Phase | Config | rps | p50 | p99 | Errors |
-|---|---|---|---|---|---|
-| Healthy | fixed-high (64) | 356.2 | 239 ms | 818 ms | 50 |
-| Healthy | adaptive | 181.2 | **163 ms** | **548 ms** | 23 |
-| Degraded | fixed-high (64) | 15.7 | 3,139 ms | 6,291 ms | **1,468** |
-| Degraded | adaptive | **19.2** | **169 ms** | 4,207 ms | **5** |
-| Recovered | fixed-high (64) | 357.6 | 241 ms | 1,453 ms | 51 |
-| Recovered | adaptive | 215.6 | **161 ms** | **693 ms** | 31 |
-
-Across all three phases: 1,569 errors on the fixed cap against 59 on adaptive.
-
-The degraded row is the point. Adaptive is ahead on *both* axes there, more throughput
-and 294x fewer errors, because the fixed cap spends its capacity on requests that come
-back as failures. Holding 64 in flight against a backend that can't serve them doesn't
-produce 64 answers. It produces a queue and a p50 of 3.1 seconds.
-
-The healthy-phase gap is the cost, and it is a real one. 356 rps is a number the mock
-made up, but Vertex did take 550 rps in the k6 run, so a limiter that settles at 181
-would be leaving genuine throughput on the table when nothing is wrong.
-
-One number in that file needs a caveat: adaptive shows 64,488 shed requests in the
-healthy phase. That is a property of the test, not a forecast. k6 was offering load
-open-loop with no ceiling, so everything above the limit gets rejected. In production the
-only client is our own harness and we control its arrival rate.
-
-**It still ships off by default**, and the reason is the row that isn't in the table. The
-capacity collapse was simulated by reconfiguring the mock. That's a fair test of the
-controller's dynamics and a poor test of the premise, because it assumes the thing it was
-built for.
-
-So I went and tested the premise.
-
-### Vertex was never the constraint, and I can now say by how much
-
-My first two soaks ran thirty minutes apart on a Monday afternoon in US hours. That's no
-test of whether capacity moves. I re-ran the identical configuration 32 hours later at
-05:37 UTC, which is the middle of the night in the US and about as far from the first
-runs' demand conditions as I can get without waiting for a holiday
-(`results/real/capacity/vertex-dsq-offpeak-*`):
-
-| Run | When (UTC) | rps | p50 | p99 | Truncated | Rate limits |
-|---|---|---|---|---|---|---|
-| soak | Mon 20:58 | 35.6 | 1,401 ms | 7,033 ms | 3.34% | **0** |
-| soak-long | Mon 21:28 | 36.9 | 1,379 ms | 6,324 ms | 3.26% | **0** |
-| off-peak | Wed 05:37 | 31.9 | 1,464 ms | 8,182 ms | 3.62% | **0** |
-
-Two things, and the second one matters more.
-
-Throughput moved 14% across a 32-hour gap, and it moved the way I did not expect:
-off-peak was slower, not faster.
-
-Two runs cannot carry a claim about why. I don't know that a US datacentre is quieter
-at 05:37 UTC; scheduled batch work may cluster overnight while interactive traffic
-clusters in the day, in which case the "off-peak" probe landed on someone else's peak.
-A 14% swing is also well inside ordinary run-to-run variance.
-
-The honest version: **no run here observed contention**, and none of them was designed
-to. All three sat at concurrency 64, which the next section shows was nowhere near any
-vendor limit. A test with no power to detect a moving ceiling cannot be evidence that the
-ceiling does not move.
-
-**What all three do agree on is that nothing pushed back.** Zero rate-limit errors, not
-a low number but zero, across roughly 70,000 requests. Every single "error" in those runs is a `MAX_TOKENS` truncation
-at the 512 cap, which is a formatting problem, not a capacity one.
-
-Which means the 36.9 rps I've been calling a ceiling isn't a ceiling. Look at what
-throughput actually equals here:
-
-| Run | Concurrency / mean latency | Measured rps |
+| Concurrency | No TLS (mock) | With TLS (Vertex) |
 |---|---|---|
-| soak | 64 / 1.627 s = 39.3 | 35.6 |
-| soak-long | 64 / 1.592 s = 40.2 | 36.9 |
-| off-peak | 64 / 1.754 s = 36.5 | 31.9 |
+| 128 | 76.7 rps | 73.7 rps |
+| 256 | **147.0 rps** | **63.0 rps** |
+| 512 | 67.0 rps | (not run) |
 
-Throughput is just concurrency divided by latency, within about 10%. That's Little's Law
-doing exactly what it says, and it means the number was set by how many requests I chose
-to hold in flight, not by anything Google imposed. The concurrency sweep agrees: 73.7 rps
-at c=128 is 128 divided by roughly the same latency.
+The columns track until 256, where the TLS run falls off a cliff and plaintext keeps
+scaling. So TLS moves the knee from about 512 down to about 256, which is the cost of
+handshakes and record encryption on the thread that dispatches requests.
 
-So I measured our own client's behaviour and reported it as the vendor's limit. The real
-Vertex ceiling is somewhere above where I stopped, and I stopped because our TLS
-handshake path fell over at c=256, not because Vertex pushed back.
+**HTTP/2 confirms the diagnosis and doesn't fix it.** It fixed the symptom precisely,
+event loop lag from 4,301 ms to 2 ms, but throughput got worse: 55.2 rps at c=1024 against
+73.7 at c=128 on HTTP/1.1. Fewer connections means less transport-layer parallelism, and
+that costs more than the handshakes save. Shipped off behind `GEMINI_HTTP2`, kept as
+evidence rather than as a recommendation.
 
-### So I pointed k6 at Vertex and went looking for the wall
+**The mock isn't the bottleneck.** It is Python too, so it could have been. k6 against the
+same server at 400 rps offered achieved **361 rps at p50 1,354 ms**, ramping to 583 VUs,
+with the mock's own counter peaking at **611 concurrent**
+(`results/real/local/k6-mock-611-concurrent.json`). Our client managed 67 rps at 512
+concurrent against that same server.
 
-Our Python client can't answer this. One event loop saturates its TLS path around 128 in
-flight, tops out near 74 rps, and stops. k6 is Go, holds thousands concurrent, and talks
-to Vertex directly with no service in between. That control arm was in the repo from the
-start and had only ever run as a ten-request smoke test.
+**So the ceiling is per process.** Same 512 total concurrency, same backend, same machine,
+only process count changes (`results/real/local/multiprocess-experiment.json`):
 
-A ramp to 550 requests per second, output capped at 64 tokens so the bill stayed bounded,
-`evertune-tests`/us-central1 (`results/real/capacity/k6-vertex-ceiling.json`):
+| | Throughput | p50 | p99 |
+|---|---|---|---|
+| 1 process at c=512 | 67 rps | 6,008 ms | 13,206 ms |
+| **4 processes at c=128 each** | **307 rps** | **1,380 ms** | ~2,850 ms |
+
+**4.6x the throughput and 4.4x better p50 from the same 512 requests.** Each process
+turned in 74 to 78 rps, the single-process c=128 figure repeated four times, scaling
+linearly because nothing is shared.
+
+So the constraint is one Python event loop in two parts: TLS crypto costs about half the
+usable concurrency, and underneath that the loop runs out of dispatch capacity past 256 in
+flight regardless. Both are per process, so neither is fixed by threads or a bigger pool.
+**Plan on roughly 74 rps per process.** Want 550? About 8 processes.
+
+### What Vertex actually takes
+
+Everything above measures us. To measure Google I needed a client that isn't ours, so I
+pointed k6 straight at Vertex with no service in between. That control arm was in the repo
+from the start and had only ever run as a ten-request smoke test.
+
+A ramp to 550 rps, output capped at 64 tokens to bound the bill
+(`results/real/capacity/k6-vertex-ceiling.json`):
 
 | | |
 |---|---|
@@ -1139,68 +1040,43 @@ A ramp to 550 requests per second, output capped at 64 tokens so the bill stayed
 | p50 / p95 / p99 | 803 ms / 1,081 ms / 1,380 ms |
 | Cost | $3.85 |
 
-Nothing broke at the transport layer. Vertex took 550 requests a second and about
-29,000 output tokens a second without a single rejection, and p99 stayed under 1.4
-seconds the whole way up.
-
-**But "0% failed" here means HTTP, not usable.** 19,038 of 26,743 answers hit the
-64-token cap, so only 28.8% finished cleanly. That cap was deliberate, to bound the bill
-while measuring a request rate, and truncation does not affect whether Vertex accepts
-load. It does mean this run is evidence about admission and throughput and nothing else.
-It is not evidence that 550 rps of *usable brand samples* is achievable, and I have not
-measured that.
-
-**Which means this is a lower bound, not a ceiling.** The ramp's top stage says
-`target: 550`, so k6 dispatched 550 and stopped. A table of zeroes reads like a discovery
-when it is really an absence.
-
-Three things say the generator wasn't the constraint either:
-
-| Signal | Value | What it rules out |
-|---|---|---|
-| `dropped_iterations` | **0** | k6 delivered every scheduled request |
-| VUs in use | 429 of 700 | 39% headroom in the pool |
-| `http_req_blocked` | 0.92 ms avg | almost no waiting for a connection slot |
-
-And `http_req_waiting` averaged 811 ms, which is Vertex thinking. That single number is
-99.9% of the response time. Nothing on my side was working hard.
-
-To put a floor under the rig itself I ran the calibration scenario against the mock, which
-ramps to 4,000 rps for free: **57,941 requests, zero dropped iterations, p99 81 ms**. So
-k6 on this machine delivers a 4,000 rps schedule without complaint. The Vertex run asked
-it for 550, about 14% of that.
-
-So the table is a floor, not a ceiling. Vertex sustained at least
-550 rps. Its actual limit is somewhere above, and I stopped because I had answered the
-question that mattered, not because Google made me.
-
-Put that next to our own numbers and the picture is unambiguous:
-
 | Path | Peak | 429s |
 |---|---|---|
 | Python client to Vertex | 73.7 rps | 0 |
 | **k6 to Vertex** | **550 rps** (as configured) | **0** |
 
-Same endpoint, same project, same region, same day. **7.5x more throughput from a
-different client.** The limit I spent three sections characterising is ours.
+Same endpoint, same project, same day: **7.5x more throughput from a different client.**
 
-Two more caveats. The 64-token cap keeps latency and cost down, so this bounds a request
-rate rather than a token-per-minute quota; production answers run about 145 tokens, and
-the same token throughput would be reached at roughly 240 rps. And a 95-second ramp says
-nothing about a sustained hour.
+Two honest limits on that number. **"0% failed" means HTTP, not usable**, since 19,038 of
+26,743 answers hit the 64-token cap. The cap was deliberate and truncation doesn't affect
+whether Vertex accepts load, but this is evidence about admission and throughput only.
+And **550 is a lower bound, not a ceiling**: the ramp's top stage says `target: 550`, so
+k6 dispatched 550 and stopped. The generator wasn't the constraint either, with zero
+dropped iterations, 429 of 700 VUs in use, 0.92 ms average `http_req_blocked`, and
+`http_req_waiting` at 811 ms which is 99.9% of the response time. Separately, k6 on this
+machine delivers a 4,000 rps schedule against the mock with zero drops, so at 550 it was
+coasting.
 
-The practical consequence for Evertune: a report refresh of 20,000 requests is about 36
-seconds of Vertex's time. Everything I measured before this was our single Python process
-queueing in front of a vendor that was idle.
+I also re-ran the soak configuration 32 hours later at 05:37 UTC to test whether capacity
+moves (`results/real/capacity/vertex-dsq-offpeak-*`). It gave 31.9 rps against 36.9, so
+throughput varies by about 14%, and slower off-peak rather than faster. Two runs can't
+carry a claim about why, and all three sat at concurrency 64, nowhere near any vendor
+limit. **No run here observed contention, and none was designed to.**
 
-### Why I stopped ramping, and what to plan with instead
+Throughput in all three is just concurrency divided by latency, within about 10%:
 
-The obvious next step was to keep climbing until Vertex said no. I priced it at about $4
-with a small output cap. I didn't run it, and the reason is worth more than the number
-would have been.
+| Run | Concurrency / mean latency | Measured rps |
+|---|---|---|
+| soak | 64 / 1.627 s = 39.3 | 35.6 |
+| soak-long | 64 / 1.592 s = 40.2 | 36.9 |
+| off-peak | 64 / 1.754 s = 36.5 | 31.9 |
 
-Google's on-demand tier doesn't ration by requests per second. It rations by **tokens per
-minute**, at the organisation level, and the baselines are published:
+That is Little's Law doing exactly what it says. The number was set by how many requests I
+chose to hold in flight.
+
+**So I stopped ramping**, and read the quota documentation instead. Google's on-demand
+tier doesn't ration by requests per second. It rations by **tokens per minute** at the
+organisation level, and the baselines are published:
 
 | Tier | Org spend, rolling 30 days | Baseline TPM, Flash |
 |---|---|---|
@@ -1208,40 +1084,22 @@ minute**, at the organisation level, and the baselines are published:
 | 2 | $250 to $2,000 | 4,000,000 |
 | 3 | above $2,000 | 10,000,000 |
 
-The docs are explicit that "there's no separate requests-per-minute (RPM) limit for each
-tier." So a rate in requests per second isn't the unit the system meters in, and hunting
-for one measures the wrong thing.
+The docs say plainly that "there's no separate requests-per-minute (RPM) limit for each
+tier," so an rps ceiling isn't the unit the system meters in. The run I already paid for
+converts better than the one I was about to buy: at 34.2 input and 53.4 output tokens,
+550 rps is **2.89M TPM against a Tier 1 baseline of 2M**, already 1.45x the published
+floor on best-effort burst, accepted without a rejection.
 
-Convert our run and it gets more interesting. It measured 34.2 input and 53.4 output
-tokens per request, so 550 rps is **2.89M TPM against a Tier 1 baseline of 2M**. We were
-already running at 1.45x the published floor, on best-effort burst, and Vertex accepted
-all of it without a single rejection. The run I already paid for is a better data point
-than the one I was about to buy.
+Three more reasons a ramp would produce an unusable number. Google documents an
+**acceleration limit** separate from capacity and warns that sharp usage increases trip
+it, which a ramping load test is by construction. A **429 is documented as transient
+contention**, not a fixed quota, so the rejection point moves with what other customers
+are doing. And 429s on pay-as-you-go are **excluded from the SLA error rate** entirely;
+Provisioned Throughput is the only thing anyone commits to.
 
-Three more reasons the ramp would have produced a number I couldn't use.
-
-**A ramp measures the ramp.** Google documents an acceleration limit separate from
-capacity: "You may encounter 429 errors because of acceleration limits if your project has
-a sharp increase in usage. To avoid hitting acceleration limits, ramp up your traffic
-gradually." A ramping load test is a sharp increase in usage by construction. It would
-find its own shape.
-
-**A 429 isn't a ceiling.** Also documented: "If you receive a 429 error, it doesn't
-indicate that you've hit a fixed quota. It indicates temporary high contention for a
-specific shared resource." So the rejection point moves with what every other customer in
-the region is doing.
-
-**And it isn't a promise.** 429s on pay-as-you-go are explicitly excluded from the SLA
-error rate. Google's answer to "guarantee me throughput" is Provisioned Throughput, sold
-in Generative AI Scale Units on a fixed term. That's the only number anyone commits to.
-
-So here's the planning table, derived from published baselines and measured token
-shapes rather than from a load test.
-
-The token shape has to be the blended one. Production runs both arms, and a grounded
-answer is 3.9x longer than an ungrounded one (549 output tokens against 120, measured on
-the same prompt in the production unit). Using the ungrounded figure alone, which is what
-I did first, overstates capacity by 2.4x:
+So the planning table comes from published baselines and measured token shapes. It has to
+use the blended shape, because production runs both arms and a grounded answer is 3.9x
+longer (549 output tokens against 120, same prompt):
 
 | Arm | Tokens/request |
 |---|---|
@@ -1255,53 +1113,28 @@ I did first, overstates capacity by 2.4x:
 | 2 | **182** | 2.5 | 1.8 min |
 | 3 | **456** | 6.2 | 0.7 min |
 
-Even the entry tier finishes a report refresh in under four minutes, so the conclusion
-survives: capacity is not the interesting problem. But the margin is 2.4x thinner than my
-first table said, and at Tier 1 the vendor's token budget binds before our process count
-does. That inverts the recommendation for a small deployment: one process is enough, and
-the lever is the tier, not the fleet.
+Even the entry tier finishes a report refresh in under four minutes, so capacity is not
+the interesting problem. But at Tier 1 the vendor's token budget binds before our process
+count does, which inverts the sizing advice for a small deployment: one process is enough,
+and the lever is the tier rather than the fleet.
 
-### The endpoint is worth revisiting
+One config note. Everything here ran against `us-central1`, the region the project was set
+up in. Google's published baselines are quoted for the **global** endpoint, which routes to
+whichever region has capacity. My own small region comparison points the same way, 1,329 ms
+against 1,471 ms p50 with thinking off, and 3,339 against 4,106 with it on. **Worth trying
+global**, unless data residency rules it out. It's a config change and no code, and I left
+the default alone so every measurement here stays comparable.
 
-Everything in this document ran against `us-central1`, which is the region the project
-was set up in, so I took it as given rather than as a decision. It's worth questioning.
+### The production shape, end to end
 
-Google's published TPM baselines are stated for the **global** endpoint, which "dynamically
-routes your requests to the region with the most available capacity at that moment,"
-giving access to a multi-region pool and "significantly increasing your potential for
-successful bursting and reducing the likelihood of 429 errors." A regional endpoint ties
-you to one region's spare capacity.
-
-My own region comparison, small and made for another purpose, points the same way:
-
-| Endpoint | p50, thinking off | p50, thinking dynamic |
-|---|---|---|
-| `global` | **1,329 ms** | **3,339 ms** |
-| `us-central1` | 1,471 ms | 4,106 ms |
-
-Global was faster in both arms. I'd treated that as a curiosity about regional load.
-Reading the quota docs makes it look more like the routing working as advertised.
-
-**Worth trying the global endpoint**, unless data residency rules it out, which is a
-question for whoever owns that policy rather than for me. The provider takes `location`
-from configuration, so it's a config change and no code. I've left the default at
-`us-central1` so every measurement here stays comparable, and flagged it rather than
-quietly switching it underneath the evidence.
-
-### Running the actual production shape, end to end
-
-Everything above tests one piece at a time. None of it runs the thing Evertune would
-actually run, which is: through our service, both conditions mixed, production output
-caps, and the same prompt sampled repeatedly rather than a stream of different ones.
-
-So I ran that (`results/real/capacity/k6-production-shape.json`). k6 to
-`service/app.py` on 4 uvicorn workers to real Vertex, 9 requests per second offered for
-two minutes, 50/50 grounded, cap 1,536, temperature 1.0, one prompt repeated.
+Everything above tests one piece at a time. This runs what Evertune would actually run:
+through our service, both conditions mixed, production caps, one prompt sampled repeatedly
+(`results/real/capacity/k6-production-shape.json`). k6 to `service/app.py` on 4 uvicorn
+workers to real Vertex, 9 rps offered for two minutes, 50/50 grounded, cap 1,536.
 
 | | |
 |---|---|
-| Offered | 1,109 |
-| Served | 1,074 |
+| Offered / served | 1,109 / 1,074 |
 | **Shed with 503** | **35 (3.2%)** |
 | Rate limited by Vertex | 0 |
 | Grounded share achieved | 49% |
@@ -1310,26 +1143,22 @@ two minutes, 50/50 grounded, cap 1,536, temperature 1.0, one prompt repeated.
 | **Usable samples** | **100.0%** |
 | Cost | $0.76 |
 
-**Every served request produced a countable sample.** No truncation, no silent
-degradation, no answer arriving in the wrong condition. That is the number the earlier
-runs could not produce, because they measured HTTP success on an arm that truncates 71%
-of the time at a 64-token cap. At the production cap the grounded arm does not truncate
-at all, which also confirms the 1,536 recommendation from section 1 was right.
+**Every served request produced a countable sample**: no truncation, no silent
+degradation, no answer arriving in the wrong condition. That is what the earlier runs
+could not show, since they measured HTTP success on an arm truncating 71% of the time.
+It also confirms the 1,536 cap from section 1.
 
-The interesting part is the 3.2% that never got in.
+The 3.2% that never got in is the finding.
 
 | | |
 |---|---|
-| End-to-end p50 | 8,179 ms |
-| p90 | 20,182 ms |
-| p99 | **39,058 ms** |
+| End-to-end p50 / p90 / p99 | 8,179 ms / 20,182 ms / **39,058 ms** |
 | Our overhead p50 | **0.38 ms** |
 | Queue wait p99 | **0 ms** |
 | Vertex p50 | 8,593 ms |
 
-Our overhead is still a third of a millisecond and the queue never formed, so the
-shedding is admission control working rather than a system falling over. What drove it
-is the tail. Little's Law again:
+Our overhead is a third of a millisecond and the queue never formed, so shedding is
+admission control working rather than a system falling over. The tail drove it:
 
 | At 9 rps and this latency | Concurrent requests needed |
 |---|---|
@@ -1337,81 +1166,51 @@ is the tail. Little's Law again:
 | p90, 20.2 s | 182 |
 | **p99, 39.1 s** | **352** |
 
-Capacity was 128, so the mean fits comfortably and the tail does not. **Grounded latency
-has a tail long enough that mean-based capacity planning under-provisions by 3x.** Sizing
-on the p50 would have looked fine and shed traffic in production.
+Capacity was 128, so the mean fits and the tail does not. **Grounded latency has a tail
+long enough that mean-based capacity planning under-provisions by 3x.** Size a mixed
+workload on the grounded p99, roughly 5x more headroom than the average suggests. The
+ad-hoc burst case in section 5 is where this bites, because a report kicked off by a click
+arrives all at once against exactly this profile.
 
-Two things follow. Capacity for a mixed workload has to be sized on the grounded p99,
-not the blended mean, which is roughly 5x more headroom than the average suggests. And
-the ad-hoc burst case in section 5 is the one to watch, because a report kicked off by a
-click arrives all at once against exactly this latency profile.
+What it does not show: two minutes is not a soak, 1,074 requests is not a report, and 9 rps
+was chosen to bound cost. Vertex never pushed back, at 138k tokens per minute or about 7%
+of the entry-tier baseline.
 
-Worth noting what this run does not show. Two minutes is not a soak, 1,074 requests is
-not a report, and 9 rps was chosen to bound cost rather than to find a limit. Vertex
-never pushed back: 138k tokens per minute, about 7% of the entry-tier baseline. The
-constraint here was ours again, and this time it was deliberate.
+### Adaptive concurrency: it works, and it ships off
 
-### So what is the constraint, exactly?
+`parallelism()` returning a constant assumes capacity is discovered once. Vertex uses
+Dynamic Shared Quota, which publishes no per-project ceiling and is documented as moving
+with regional demand, so on paper a constant has a shelf life. I built a gradient limiter
+keyed on **latency** rather than error codes, because Vertex often doesn't reject excess
+load, it just slows down, and a controller watching only 429s sees a healthy service and
+keeps climbing.
 
-"It's us" is not an answer anyone can act on. Four runs narrow it down, and three of them
-were free.
+Three configurations against a mock whose capacity collapses mid-run and recovers
+(`results/real/local/adaptive-experiment.txt`):
 
-**Take TLS out of the picture.** Same Python client, same concurrency points, but pointed
-at the mock over plain HTTP with its latency tuned to match Vertex's ~1.4 s
-(`results/real/local/notls-sweep-manifest.json`):
+| Phase | Config | rps | p50 | p99 | Errors |
+|---|---|---|---|---|---|
+| Healthy | fixed-high (64) | 356.2 | 239 ms | 818 ms | 50 |
+| Healthy | adaptive | 181.2 | **163 ms** | **548 ms** | 23 |
+| Degraded | fixed-high (64) | 15.7 | 3,139 ms | 6,291 ms | **1,468** |
+| Degraded | adaptive | **19.2** | **169 ms** | 4,207 ms | **5** |
+| Recovered | fixed-high (64) | 357.6 | 241 ms | 1,453 ms | 51 |
+| Recovered | adaptive | 215.6 | **161 ms** | **693 ms** | 31 |
 
-| Concurrency | No TLS (mock) | With TLS (Vertex) |
-|---|---|---|
-| 64 | 39.4 rps | 36.1 rps |
-| 128 | 76.7 rps | 73.7 rps |
-| 256 | **147.0 rps** | **63.0 rps** |
-| 512 | 67.0 rps | (not run) |
+1,569 errors on the fixed cap against 59 on adaptive, across all phases. The degraded row
+is the point: adaptive wins on *both* axes there, because a fixed cap holding 64 in flight
+against a backend that can't serve them produces a queue and a 3.1-second p50, not 64
+answers. The healthy-phase gap is the real cost, since Vertex did take 550 rps, so a
+limiter settling at 181 leaves genuine throughput on the table when nothing is wrong.
+(The 64,488 shed requests in that file are an artifact of k6 offering open-loop load with
+no ceiling, not a forecast.)
 
-The two columns track each other until 256, where the TLS run falls off a cliff and the
-plaintext run keeps scaling. So TLS roughly halves the concurrency one process can carry.
-It moves the knee from about 512 down to about 256, and that is the cost of doing
-handshakes and record encryption on the same thread that dispatches requests.
-
-**But TLS isn't the whole story**, because the plaintext run collapses too, just later.
-Something else caps a single process around 256 to 512 in flight.
-
-**Rule out the mock.** It's Python too, so it could have been the thing that broke. k6
-against the same server, same 1.4 s latency profile, offered 400 rps for 30 s
-(`results/real/local/k6-mock-611-concurrent.json`): it achieved **361 rps with a p50 of
-1,354 ms**, ramping to 583 VUs, and the mock's own counter recorded a peak of **611
-concurrent requests in flight**. Our client managed 67 rps at 512 concurrent against that
-same server. The mock is not the bottleneck.
-
-**So the ceiling is per process.** Same total concurrency of 512, same backend, same
-machine, only the number of processes changes
-(`results/real/local/multiprocess-experiment.json`):
-
-| | Throughput | p50 | p99 |
-|---|---|---|---|
-| 1 process at c=512 | 67 rps | 6,008 ms | 13,206 ms |
-| **4 processes at c=128 each** | **307 rps** | **1,380 ms** | ~2,850 ms |
-
-**4.6x the throughput and 4.4x better p50 from the same 512 concurrent requests.** Each
-process turned in 74 to 78 rps, which is the single-process c=128 figure repeated four
-times. It scales linearly because nothing is shared.
-
-So the constraint is one Python event loop, in two parts. TLS crypto is CPU work on that
-loop and costs about half the usable concurrency. Underneath, the loop runs out of
-dispatch capacity past 256 in flight, TLS or not. Both are per process, so neither is
-fixed by threads or a bigger pool. The pool experiment showed that already: 50% utilised
-while throughput collapsed.
-
-The number to plan with is **roughly 74 rps per process against Vertex**. Want 550? That's
-about 8 processes, and the earlier worker test agrees. Vertex has already shown it will
-take that and more from a single machine.
-
-That also settles the adaptive limiter, for a better reason than "we never saw a 429."
-A controller that infers a capacity ceiling from latency solves a problem the vendor says
-isn't shaped that way: contention is transient, the limit is tokens per minute, and a
-sharp ramp trips an acceleration limiter unrelated to capacity. Google's guidance here is
-backoff, traffic smoothing and the global endpoint, and the provider already does the
-first. The limiter stays off. If throughput is ever the issue, the answer is more
-processes.
+**It ships off.** The capacity collapse was simulated by reconfiguring the mock, which
+tests the controller's dynamics and assumes its premise. And the premise looks wrong:
+Google's guidance for this tier is backoff, traffic smoothing and the global endpoint, and
+contention is documented as transient rather than as a ceiling to discover. A controller
+hunting a quota wall solves a problem four runs and 97,000 requests give no evidence for.
+If throughput is ever the issue, the answer is more processes.
 
 ---
 
