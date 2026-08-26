@@ -12,10 +12,15 @@ help:
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
-venv: ## Create the venv and install dependencies
+venv: .venv/.installed ## Create the venv and install dependencies
+
+# Stamp file rather than a phony target, so targets can depend on the venv without
+# reinstalling on every invocation. Re-runs only when requirements.txt changes.
+.venv/.installed: requirements.txt
 	python3 -m venv .venv
-	$(PY) -m pip install --upgrade pip
-	$(PY) -m pip install -r requirements.txt
+	$(PY) -m pip install --quiet --upgrade pip
+	$(PY) -m pip install --quiet -r requirements.txt
+	@touch $@
 
 vertex-check: ## Verify Vertex access step by step before spending anything
 	@bash scripts/check_vertex.sh
@@ -23,7 +28,7 @@ vertex-check: ## Verify Vertex access step by step before spending anything
 preflight: ## Validate credentials + cost with ONE real request
 	$(PY) -m harness.preflight $(ARGS)
 
-test: ## Run the test suite (no network, no spend)
+test: .venv/.installed ## Run the test suite (no network, no spend)
 	$(PY) -m pytest tests/ -q
 
 mock-up: ## Start the fake Vertex endpoint on :8088
@@ -105,10 +110,10 @@ capacity: ## Find where our service sheds load
 logprobs: ## Measure what logprobs add on top of 100-sample counting
 	$(PY) scripts/logprobs_experiment.py $(ARGS)
 
-spend: ## Report actual spend to date, split by whose account paid
+spend: .venv/.installed ## Report actual spend to date, split by whose account paid
 	@$(PY) scripts/spend_report.py
 
-verify: ## Re-derive every number in FINDINGS from committed data (no spend)
+verify: .venv/.installed ## Re-derive every number in FINDINGS from committed data (no spend)
 	@$(PY) scripts/verify_findings.py
 
 verify-all: verify ## Everything checkable offline, plus the vendor rates
