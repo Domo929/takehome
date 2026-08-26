@@ -201,6 +201,26 @@ make adaptive-demo                               # adaptive vs fixed, mock only
 `.env.local` is read at startup and is gitignored. Real exported variables always win
 over the file.
 
+## Packaging a copy
+
+```bash
+git archive --format=zip -o submission.zip HEAD
+```
+
+Exports tracked files at HEAD and nothing else. Notably it excludes `.git`, which
+matters because a working clone accumulates local refs and dangling objects that were
+never part of any branch — `.env.local` among them. Zipping the directory would ship
+those; `git archive` cannot.
+
+Verify before sending:
+
+```bash
+unzip -qo submission.zip -d /tmp/check
+grep -rE "AIza[0-9A-Za-z_-]{30,}" /tmp/check   # expect no matches
+cd /tmp/check && python -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/pytest tests/                        # expect 50 passed, no network
+```
+
 ## Troubleshooting
 
 **`GOOGLE_CLOUD_PROJECT is required`** — Vertex needs a project. Set it or pass
