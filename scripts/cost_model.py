@@ -17,13 +17,32 @@ from __future__ import annotations
 
 import argparse
 
-# Measured, per successful request. See results/real/*-manifest.json.
-# Per successful request, measured on Vertex us-central1.
-# See results/real/uscentral-tb*-manifest.json.
+# Measured per successful request on Vertex us-central1, from the n=100 runs in
+# results/real/model/think-{off,dyn}-n100-*.
+#
+# These replaced an earlier n=15 pair (results/real/model/uscentral-tb*). That sample
+# was too small to carry a cost model: bootstrapping its thinking ratio gives a 95%
+# interval of [2.36, 7.42], and FINDINGS Appendix B retires it by name. It was still
+# quietly the basis for every dollar figure here, which understated the ungrounded
+# unit cost by about 30%.
 PROFILES = {
-    "thinking-off": {"input": 35.3, "output": 111.1, "thinking": 0.0},
-    "thinking-dynamic": {"input": 35.3, "output": 458.3, "thinking": 368.6},
+    "thinking-off": {"input": 34.5, "output": 145.3, "thinking": 0.0},
+    "thinking-dynamic": {"input": 34.5, "output": 533.6, "thinking": 411.2},
 }
+
+# Output length is a property of the prompt, not of the model, and it moves the unit
+# cost more than any lever in this file. Measured means for ungrounded, thinking off:
+#
+#   111.1  results/real/model/uscentral-tb0      n=15,  distinct prompts, cap 1024
+#   119.6  results/real/measurement/production-unit  n=100, ONE prompt,   cap 1536
+#   145.3  results/real/model/think-off-n100     n=100, distinct prompts, cap 2048
+#   160.7  results/real/measurement/grounding    n=20,  distinct prompts
+#   166.0  results/real/measurement/tool-refusal n=50,  distinct prompts, cap 512
+#
+# That is a 1.5x spread, so treat any single figure below as the middle of a range
+# rather than a quote. Re-measure against the real prompt corpus before committing to
+# a budget.
+OUTPUT_TOKEN_RANGE = (111.1, 166.0)
 
 GROUNDING_USD_PER_1K = 35.0
 PRICE_IN = 0.30
@@ -107,6 +126,13 @@ def main() -> None:
 
     print("\nNotes")
     print("  - Token counts are measured from live runs, not estimated.")
+    lo, hi = OUTPUT_TOKEN_RANGE
+    p = PROFILES["thinking-off"]
+    c_lo = (p["input"] * PRICE_IN + lo * PRICE_OUT) / 1_000_000
+    c_hi = (p["input"] * PRICE_IN + hi * PRICE_OUT) / 1_000_000
+    print(f"  - Ungrounded output ran {lo:.0f} to {hi:.0f} tokens across five corpora,")
+    print(f"    so the unit cost spans ${c_lo:.7f} to ${c_hi:.7f} ({c_hi/c_lo:.2f}x)")
+    print(f"    on prompt wording alone. Figures above use {p['output']:.1f}, the n=100 run.")
     print("  - Batch trades up to 24h turnaround for ~50% off. A daily sweep can absorb that.")
     print("  - Context caching is omitted: it needs >= 2,048 input tokens and the")
     print(f"    measured workload is ~{PROFILES['thinking-off']['input']:.0f}. It cannot engage.")

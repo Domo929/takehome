@@ -76,6 +76,7 @@ make capacity             # find where the service sheds load
 make sweep-mock           # concurrency sweep through the provider
 make pool-experiment      # connection pool vs throughput
 make calibrate            # the rig's own ceiling
+make verify               # re-derive every FINDINGS number from committed data
 make auth-check           # token fetches are O(VUs), not O(requests)
 ```
 
@@ -135,7 +136,7 @@ These are mechanical, not advisory:
    refuses to start.
 3. **Runtime breaker.** Accumulated actual spend, from reported `usage_metadata`,
    never estimated, is checked before every dispatch. When it trips the run drains
-   and stops. Overshoot is bounded by concurrency × cost-per-request, because
+   and stops. Overshoot is bounded by concurrency x cost-per-request, because
    in-flight requests cannot be recalled.
 4. **`max_output_tokens` is always set.**
 5. **`thinking_budget=0` by default.**

@@ -44,7 +44,7 @@ Six things that changed what I'd build. All of it, with the data, is in
 **[FINDINGS.md](FINDINGS.md)**.
 
 **Grounding is the measurement, and it's ~99% of the bill.** Evertune runs each prompt
-with live search off, then on, and the gap is the product. A grounded request costs 123x
+with live search off, then on, and the gap is the product. A grounded request costs 95x
 an ungrounded one on a separate per-prompt SKU. Which means most token optimisations
 Batch, caching, even switching to a cheaper model, work on about 1% of the spend.
 
@@ -80,16 +80,20 @@ signed token that expires. Resolve provenance at collection time or lose it.
 Check any of it without spending anything:
 
 ```bash
-python scripts/confidence.py     # bootstrap CIs from committed data
-python scripts/verify_pricing.py # rates against Google's billing catalog
-python scripts/spend_report.py   # what this cost, by account
+python scripts/verify_findings.py # re-derive all 66 headline numbers, fails on drift
+python scripts/confidence.py      # bootstrap CIs from committed data
+python scripts/verify_pricing.py  # rates against Google's billing catalog
+python scripts/spend_report.py    # what this cost, by account
 ```
+
+The first one is the one to run. It recomputes every figure in FINDINGS from the
+committed records and exits non-zero if the document disagrees with its own data.
 
 ## Cost safety
 
 Dry run by default; `--confirm` to spend. A pre-flight estimate refuses to start when
 it already exceeds `--budget-usd`, and a runtime breaker checks accumulated *actual*
-spend before every dispatch. See FINDINGS §7 and RUNBOOK.
+spend before every dispatch. See FINDINGS section 7 and RUNBOOK.
 
 ---
 

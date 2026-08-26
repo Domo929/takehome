@@ -58,10 +58,10 @@ on `evertune-tests`/us-central1, 2,048-token cap so nothing was truncated:
 
 | `thinking_budget` | Cost/request | p50 | Output tokens | Of which thinking |
 |---|---|---|---|---|
-| `0` (off) | **$0.000374** | 1,481 ms | 145.3 | 0 |
-| `-1` (default) | $0.001344 | 3,751 ms | 533.6 | 411.2 |
+| `0` (off) | **$0.000374** | 1,527 ms | 145.3 | 0 |
+| `-1` (default) | $0.001344 | 3,778 ms | 533.6 | 411.2 |
 
-Turning it off is **3.60x cheaper** on this workload, 95% CI [3.00, 4.35], and **77% of
+Turning it off is **3.60x cheaper** on this workload, 95% CI [3.00, 4.36], and **77% of
 billed output was invisible reasoning**. Data in
 `results/real/model/think-off-n100-*` and `think-dyn-n100-*`.
 
@@ -176,12 +176,12 @@ vocabularies, 60 samples each.
 | | 2.5 Flash | 2.5 Flash-Lite |
 |---|---|---|
 | Cost per request | $0.000309 | **$0.000027** (11.5x cheaper) |
-| Distinct brands found | 148 | 127 (−14%) |
-| Brands in the informative 10–90% band | **81** | **57** (−30%) |
+| Distinct category/brand pairs | 148 | 127 (-14%) |
+| Brands in the informative 10-90% band | **81** | **57** (-30%) |
 
 Flash-Lite is much cheaper and it resolves less. It finds 14% fewer brands outright,
-and 30% fewer in the band where a mention rate is actually informative (§2 explains why
-that band is the number that matters). The two models mostly agree on who leads, with
+and 30% fewer in the band where a mention rate is actually informative (section 2
+explains why that band is the number that matters). The two models mostly agree on who leads, with
 Herman Miller and Steelcase topping office chairs in both, so this reads as a resolution
 difference rather than a disagreement about the market.
 
@@ -197,8 +197,8 @@ picture: roughly a third of the brands that carry a meaningful rate on Flash wil
 as always-present or absent on Flash-Lite. That is a caveat to attach to the output, not
 a knob to turn.
 
-Data in `results/real/flash-lite-*`, compared against the temperature 1.0 cells of
-`results/real/temperature-multi-*`.
+Data in `results/real/model/flash-lite-*`, compared against the temperature 1.0
+cells of `results/real/measurement/temperature-multi-*`.
 
 ## 2. What I learned about the measurement
 
@@ -236,22 +236,34 @@ rather than the docs, because two sources quoted different numbers and one API c
 settles it: SKU `F307-73C9-C204`, **$0.035 per grounded prompt above a 1,500-prompt free
 allowance**. Both the $14 and $25 figures I found floating around online are wrong.
 
-So a grounded request costs **123x** an ungrounded one. At 100 samples that's $3.53 per
-prompt against $0.03.
+So a grounded request costs **95x** an ungrounded one. At 100 samples that's $3.54 per
+prompt against $0.04.
 
 ### Which means most cost levers don't matter
 
 This is the part I'd want a reviewer to sit with, because it inverts the obvious
 analysis.
 
-| Lever | Applies to | Share of a two-condition bill it touches |
-|---|---|---|
-| Thinking off | both conditions | ~100% of *token* cost |
-| Batch API (2x) | ungrounded only, batch has no tool support | **~1%** |
-| Context caching | neither, floor is 2,048 input tokens, workload is 35 | **0%** |
-| **Grounding SKU** | grounded only | **~99%** |
+Every figure below comes from the paired n=20 grounding run, which measured both
+conditions on the same prompts, so the shares are internally consistent rather than
+stitched together from separate runs.
 
-Every token optimisation in this document works on roughly 1% of the bill. Batch
+| Component of a two-condition bill | Cost | Share |
+|---|---|---|
+| Ungrounded tokens | $0.000412 | 1.14% |
+| Grounded tokens | $0.000759 | 2.10% |
+| **Grounding SKU** | **$0.035000** | **96.76%** |
+
+Which turns every lever into a small number:
+
+| Lever | Applies to | Most of the bill it can remove |
+|---|---|---|
+| Thinking off | both token arms | **3.2%** |
+| Batch (50% off) | ungrounded tokens only, batch has no tool support | **0.6%** |
+| Context caching | neither, floor is 2,048 input tokens, workload is 35 | **0%** |
+
+Every token optimisation in this document fights over about 3% of the bill, and the
+single biggest one is worth less than a rounding error on the grounding line. Batch
 prediction can't run grounded requests at all, and implicit caching can't engage on a
 35-token prompt. It needs 2,048 minimum, so the workload is 58x below the floor.
 
@@ -319,21 +331,32 @@ now on a second sample. The grounded arm needs a larger output cap, not the same
 One request in that run came back `MAX_TOKENS` with zero output tokens and still billed
 the full $0.035 grounding charge before the retry succeeded. Worth knowing that a failed
 grounded request costs the same as a successful one, so retries on the grounded arm are
-123x more expensive than retries on the ungrounded arm.
+95x more expensive than retries on the ungrounded arm.
 
 ### Grounding changes the answers, which is the whole point
 
-One production unit: same prompt, 100 samples, both conditions, $3.67
-(`results/real/measurement/production-unit-*`).
+One production unit: same prompt, 100 samples, both conditions, **$3.67**
+(`results/real/measurement/production-unit-*`). That is $0.17 of tokens across all 200
+requests and $3.50 of grounding SKU, which is the whole point of section 5.
+
+Every brand whose interval excludes zero, not a selection:
 
 | Brand | Ungrounded | Grounded | Delta | 95% CI |
 |---|---|---|---|---|
 | **Dreame** | 5 | **97** | **+92** | [+86, +97] |
 | Ecovacs | 52 | 93 | +41 | [+30, +52] |
-| Eufy | 65 | 99 | +34 | [+25, +44] |
-| Narwal | 3 | 36 | +33 | [+23, +43] |
-| **Anker** | 18 | **3** | **−15** | [−24, −7] |
-| **iRobot** | 100 | **85** | **−15** | [−22, −9] |
+| Eufy | 65 | 99 | +34 | [+24, +44] |
+| Narwal | 3 | 36 | +33 | [+23, +44] |
+| Samsung | 6 | 33 | +27 | [+16, +37] |
+| Shark | 56 | 80 | +24 | [+11, +37] |
+| **Anker** | 18 | **3** | **-15** | [-23, -7] |
+| **iRobot** | 100 | **85** | **-15** | [-22, -8] |
+| Dyson | 4 | 19 | +15 | [+7, +23] |
+| Xiaomi | 1 | 14 | +13 | [+6, +20] |
+| Roborock | 100 | 90 | -10 | [-16, -5] |
+
+Three more moved too little to call: Neato -3 [-11, +5], Roomba -2 [-5, +0], Deebot
++2 [-12, +16]. Reproduce the whole table with `python scripts/confidence.py`.
 
 Dreame shows up in 5% of ungrounded samples and 97% of grounded ones. Anker falls as
 Eufy rises, which tracks, Anker's robot vacuums are sold under the Eufy brand.
@@ -355,7 +378,7 @@ visibility needs all 852 redirects resolved first, and those tokens expire.
 
 For a product tracking brand visibility over time, provenance has to be resolved at
 collection time or it is gone. Resolving redirects was outside what the exercise asked
-for, so it is written up in §7 as production work rather than built here.
+for, so it is written up in section 7 as production work rather than built here.
 
 Retrieval does vary, in the one place it is visible. 100 identical prompts issued 428
 searches
@@ -383,7 +406,7 @@ categories beat temperature 1.0:
 But coverage isn't the interesting part. Look at where per-brand mention rates actually
 land:
 
-| Temp | Rate <5% | Middle | Rate >95% | In the 10–90% band |
+| Temp | Rate <5% | Middle | Rate >95% | In the 10-90% band |
 |---|---|---|---|---|
 | **0.00** | 18 | **7** | 78 | **0 of 103** |
 | 0.70 | 16 | 95 | 33 | 74 of 144 |
@@ -412,9 +435,14 @@ The curve flattens at 1.0. 1.0 beats 0.7 by +0.64 brands per category, 95% CI
 about the same thing.
 
 It is worth asking whether values above 1.0 do anything at all, since some APIs clamp
-them. They are not clamped here. 1.4 produced 142 distinct brands against 1.0's 139, and
+them. They are not clamped here. 1.4 produced 142 distinct brand names against 1.0's 139, and
 335 distinct answer sets against 294. It is doing something, it just is not finding
 anything new.
+
+(Two units are in play and they are easy to confuse. A brand *name* counted once
+globally, and a *category/brand pair*, which counts Samsung in TVs separately from
+Samsung in phones. The pair is the one that matters for a per-category share, so the
+tables above use it.)
 
 The tiebreaker: **1.0 is Gemini 2.5 Flash's own default**, so there is no need to argue
 that a
@@ -470,20 +498,32 @@ them on or off) and they see below the counting floor.
 
 In a 100-sample run where iRobot won 97 times:
 
-| Token | Mean probability | In any sample? |
-|---|---|---|
-| iRobot | 0.9308 | yes |
-| Roomba | 0.0470 | yes |
-| **Roborock** | **0.0183** | **no, 0/100** |
-| **Shark** | **0.0023** | **no, 0/100** |
+| First token | Reads as | Mean probability | In any sample? |
+|---|---|---|---|
+| `i` | iRobot | 0.9308 | yes, 97/100 |
+| `Room` | Roomba | 0.0470 | yes, 3/100 |
+| `Rob` | Roborock | **0.0183** | **no, 0/100** |
+| `Shark` | Shark | **0.0023** | **no, 0/100** |
+
+The middle column is my reading, not the API's. The prompt was constrained to return a
+single brand name, so `Rob` is almost certainly Roborock, but the model emits tokens and
+the mapping to a brand is an inference.
 
 Roborock is a major brand in that category. It held 1.83% of the probability mass and
 appeared in zero samples. Counting reports it as absent, which is indistinguishable from
 a brand the model has never heard of. Those are very different findings, and only one is
 true.
 
-Catching Roborock by counting would take roughly 1,300 samples. Shark would need 10,900,
-at about $3.14 each.
+How many samples would counting need? Two thresholds, because they answer different
+questions:
+
+| | Roborock (1.83%) | Shark (0.23%) |
+|---|---|---|
+| 95% chance of seeing it once | 162 | 1,308 |
+| Enough hits for a stable rate (~25) | 1,366 | 10,930 |
+| Cost of the larger, ungrounded | $0.51 | $4.08 |
+
+At Evertune's 100 samples, neither is reachable. The logprob is already in the response.
 
 Caveat: the prompt was constrained to a single brand name so the first token is a clean
 branch point. Real prompts return prose, where brand names are multi-token and appear at
@@ -576,7 +616,7 @@ waits. A dashboard showing p50 alone would report a starved pool as healthy. p90
 mean both catch it, which is the argument for carrying p50, p90, p95 and p99 rather than
 a single number.
 
-`llm_pool_saturation_ratio` is in-flight ÷ pool size, so it exceeds 1.0 when
+`llm_pool_saturation_ratio` is in-flight / pool size, so it exceeds 1.0 when
 oversubscribed. It moves long before the median does.
 
 ### Our layer costs about 2 ms, and it sheds instead of collapsing
@@ -587,7 +627,7 @@ Same workload, 50 rps for 30 s, through the service versus straight to the backe
 |---|---|---|---|
 | direct to backend | 401.7 ms | 515.9 ms | 553.0 ms |
 | through our service | 403.6 ms | 515.7 ms | 565.3 ms |
-| **difference** | **+1.9 ms** | −0.2 ms | +12.3 ms |
+| **difference** | **+1.9 ms** | -0.2 ms | +12.3 ms |
 
 On a ~400 ms request that's about 0.5% at p50.
 
@@ -701,7 +741,7 @@ so both facts set a floor on how long a capacity test has to run. Sub-minute run
 under-report by about 2.5x here. That's worth stating because burst-shaped benchmarks
 are the norm and they systematically flatter the system.
 
-**p99 is not settled** and should be quoted as a range, roughly 3.7–9.6 s. Fine for a
+**p99 is not settled** and should be quoted as a range, roughly 3.7-9.6 s. Fine for a
 batch workload; anything with a tail SLA wants provisioned throughput instead of shared
 quota.
 
@@ -725,7 +765,7 @@ past what I ran.
 
 ### Our client peaks at 128 concurrent, and past it the bottleneck is us
 
-Vertex us-central1, 25–75 s measured per stage after discarding a warm-up window
+Vertex us-central1, 25-75 s measured per stage after discarding a warm-up window
 (`results/real/capacity/vertex-knee-*` and `vertex-extreme-*`):
 
 | Concurrency | Throughput | rps per unit | p50 | p99 | Event loop lag | Pool |
@@ -903,7 +943,7 @@ A ramp to 550 requests per second, output capped at 64 tokens so the bill stayed
 | p50 / p95 / p99 | 803 ms / 1,081 ms / 1,380 ms |
 | Cost | $3.85 |
 
-Nothing broke. Vertex took 550 requests a second and roughly 35,000 output tokens a
+Nothing broke. Vertex took 550 requests a second and about 29,000 output tokens a
 second without a single rejection, and p99 stayed under 1.4 seconds the whole way up.
 
 **Which means I did not find Vertex's limit. I found the number I typed into the
@@ -969,11 +1009,11 @@ The docs are explicit that "there's no separate requests-per-minute (RPM) limit 
 tier." So a rate in requests per second isn't the unit the system meters in, and hunting
 for one measures the wrong thing.
 
-Convert our run and it gets more interesting. At 46 input plus 64 output tokens, 550 rps
-is **3.63M TPM against a Tier 1 baseline of 2M**. We were already running at 1.8x the
-published floor, on best-effort burst, and Vertex accepted all of it without a single
-rejection. The run I already paid for is a better data point than the one I was about to
-buy.
+Convert our run and it gets more interesting. It measured 34.2 input and 53.4 output
+tokens per request, so 550 rps is **2.89M TPM against a Tier 1 baseline of 2M**. We were
+already running at 1.45x the published floor, on best-effort burst, and Vertex accepted
+all of it without a single rejection. The run I already paid for is a better data point
+than the one I was about to buy.
 
 Three more reasons the ramp would have produced a number I couldn't use.
 
@@ -993,13 +1033,13 @@ error rate. Google's answer to "guarantee me throughput" is Provisioned Throughp
 in Generative AI Scale Units on a fixed term. That's the only number anyone commits to.
 
 So here's the planning table, derived from published baselines and our measured token
-shape (46 in, 145 out in production) rather than from a load test:
+shape (34.5 in, 145.3 out, measured at n=100) rather than from a load test:
 
 | Tier | Sustained rps | Processes needed at 74 rps each | 20,000-request refresh |
 |---|---|---|---|
-| 1 | 175 | 2.4 | 1.9 min |
-| 2 | 349 | 4.7 | 1.0 min |
-| 3 | 873 | 11.8 | 0.4 min |
+| 1 | 185 | 2.5 | 1.8 min |
+| 2 | 371 | 5.0 | 0.9 min |
+| 3 | 927 | 12.5 | 0.4 min |
 
 Every row finishes a report refresh in under two minutes. Capacity is not the interesting
 problem here, which is the useful conclusion, and it cost nothing to reach.
@@ -1056,9 +1096,11 @@ handshakes and record encryption on the same thread that dispatches requests.
 Something else caps a single process around 256 to 512 in flight.
 
 **Rule out the mock.** It's Python too, so it could have been the thing that broke. k6
-against the same server, same 1.4 s latency: **400 rps sustained at 611 concurrent, p50
-1,354 ms** (`results/real/local/k6-mock-611-concurrent.json`). The mock holds 611
-concurrent without blinking. Our client managed 67 rps at 512 against it.
+against the same server, same 1.4 s latency profile, offered 400 rps for 30 s
+(`results/real/local/k6-mock-611-concurrent.json`): it achieved **361 rps with a p50 of
+1,354 ms**, ramping to 583 VUs, and the mock's own counter recorded a peak of **611
+concurrent requests in flight**. Our client managed 67 rps at 512 concurrent against that
+same server. The mock is not the bottleneck.
 
 **So the ceiling is per process.** Same total concurrency of 512, same backend, same
 machine, only the number of processes changes
@@ -1135,7 +1177,7 @@ Even the slowest row is minutes, and the token baseline binds before anything in
 control does. This is the scenario the admission control and retry budget exist for, but
 it isn't a capacity problem.
 
-It is also **$356**, of which $350 is grounding.
+It is also **$357**, of which $350 is the grounding SKU.
 
 **Scheduled is where the money is**, and cadence dominates everything else. Refresh
 frequency is the assumption I am least sure of, so here is the whole range rather than
@@ -1143,10 +1185,10 @@ one number. 200 reports, 100 prompts each:
 
 | Cadence | Grounded/yr | Ungrounded/yr | Batch saves |
 |---|---|---|---|
-| Daily | $25,760,240 | $210,240 | $105,120 |
-| Weekly | $3,669,952 | $29,952 | $14,976 |
-| **Monthly** | **$846,912** | **$6,912** | **$3,456** |
-| Quarterly | $282,304 | $2,304 | $1,152 |
+| Daily | $25,822,728 | $272,728 | $136,364 |
+| Weekly | $3,678,854 | $38,854 | $19,427 |
+| **Monthly** | **$848,966** | **$8,966** | **$4,483** |
+| Quarterly | $282,989 | $2,989 | $1,494 |
 
 Two things fall out of that table.
 
@@ -1157,8 +1199,8 @@ first conversation is about refresh frequency, not about tokens.
 
 **Batch only ever touches the ungrounded side.** Batch prediction does not support
 tools, so grounded requests run online at full rate no matter how patient the caller is.
-At monthly cadence the Batch saving is about $3,500 a year against a grounded bill of
-$847,000. Worth taking, since it is nearly free to implement, but it is not a strategy.
+At monthly cadence the Batch saving is about $4,500 a year against a grounded bill of
+$849,000. Worth taking, since it is nearly free to implement, but it is not a strategy.
 
 *(By "arm" I mean one of the two conditions. The ungrounded arm is every request made
 with live search off, the grounded arm is the same prompts with it on.)*
@@ -1177,7 +1219,7 @@ traffic in the search-augmented arm:
 | 1M requests/day | 90,909 | $580,682/yr | $6,188/yr |
 | 3M requests/day | 272,727 | $1,742,045/yr | $18,565/yr |
 
-My modelled monthly-cadence figure was $846,912. It lands between those two, which is
+My modelled monthly-cadence figure was $848,966. It lands between those two, which is
 about as much agreement as you can expect from two sets of guesses. The assumptions
 aren't verified, but they're not wild either.
 
@@ -1206,12 +1248,16 @@ reports, and above all cadence.
 
 | Configuration | $/request | vs naive |
 |---|---|---|
-| interactive, dynamic thinking (the defaults) | 0.00115634 | 1.0x |
-| thinking off | 0.00028834 | 4.0x |
-| **thinking off + Batch** | **0.00014417** | **8.0x** |
+| interactive, dynamic thinking (the defaults) | 0.00134435 | 1.0x |
+| thinking off | 0.00037360 | 3.6x |
+| **thinking off + Batch** | **0.00018680** | **7.2x** |
 
-At 50,000 ungrounded prompts/day that's $21,103/yr down to $2,631/yr. Same work, same
-model, 12% of the bill.
+At 50,000 ungrounded prompts/day that's $24,534/yr down to $3,409/yr. Same work, same
+model, 14% of the bill.
+
+These use 145.3 output tokens, the n=100 measurement. Ungrounded output ran 111 to 166
+tokens across five different prompt corpora, a 1.4x spread on wording alone, so read the
+unit costs as the middle of a range. The ratios are stable, the absolute dollars are not.
 
 Reproduce with `python scripts/cost_model.py --daily 50000`. Verify the rates it uses
 with `python scripts/verify_pricing.py`, which checks them against Google's billing
@@ -1257,7 +1303,7 @@ async def ask_generic_question(..., *, grounded: bool = False)
 
 Constraints I held to: additive only, original three fields keep their names, order and
 types, every addition defaults so `SimpleResponse("hi", 1, 2)` still works, and the new
-parameter is keyword-only with a default of `False`. A feature costing 123x per request
+parameter is keyword-only with a default of `False`. A feature costing 95x per request
 should never be a silent default.
 
 The important detail is that **the response reports what happened, not what was
@@ -1299,12 +1345,12 @@ the ability is permanently lost to answer "which publishers drive this brand's
 visibility." Biggest
 engineering gap here.
 
-**Implement Batch for the scheduled ungrounded arm.** Worth $3,456 a year at monthly
-cadence and $14,976 at weekly, against a grounded bill of $847,000. Nearly free to
+**Implement Batch for the scheduled ungrounded arm.** Worth $4,483 a year at monthly
+cadence and $19,427 at weekly, against a grounded bill of $849,000. Nearly free to
 implement and worth taking, but it is housekeeping rather than a strategy, and it has a
 clearly bounded home: scheduled refreshes only, never ad-hoc, never grounded.
 
-**Decide the grounding cadence.** At $356 per report the interesting question stops being
+**Decide the grounding cadence.** At $357 per report the interesting question stops being
 "how fast can we serve this" and becomes "does every prompt need the grounded condition,
 and how often does a report need refreshing." Worth more than every engineering lever
 here combined.
@@ -1316,7 +1362,7 @@ currently discards them, which is safe but silently reduces sample count.
 **Run more than one process, and size it from the token baseline.** One process holds
 about **74 rps** against Vertex. Four processes gave 307 rps in a controlled test, scaling
 linearly because nothing is shared. The published Tier 1 token baseline works out to about
-175 rps on the production token shape, so roughly **3 processes reach the point where
+185 rps on the production token shape, so roughly **3 processes reach the point where
 Google's metering binds instead of ours**. That is the number to size against, not a load
 test.
 
@@ -1332,7 +1378,7 @@ against whatever data residency policy applies.
 **Does the grounded arm need 100 samples?** 100 is settled for the ungrounded condition.
 Grounded answers carry retrieval variance on top of generation variance, so they're
 noisier, not quieter. But nobody has told me the sampling policy has to match across
-conditions, and at 123x per request that's the largest lever left.
+conditions, and at 95x per request that's the largest lever left.
 
 **Does the global endpoint change the numbers?** Everything here ran on `us-central1`.
 Google routes the global endpoint to whichever region has capacity, and the published
@@ -1461,7 +1507,7 @@ The thinking ratio is worth a note. I originally ran it at n=15 per config and q
 4.0x without an interval. Putting one on it was sobering: **[2.36, 7.42]**. That is not
 a measurement, it is a range containing most plausible answers, and I had been treating
 it as a fact. Re-running at n=100 moved the point estimate barely (3.60x) and tightened
-the interval to [3.00, 4.35], which is finally usable.
+the interval to [3.00, 4.36], which is finally usable.
 
 The lesson I'd keep: a point estimate with no interval hides how little it settles, and
 n=15 against a quantity with a standard deviation of 223 tokens was never going to
@@ -1513,7 +1559,7 @@ own process.
 **The thinking multiplier is the one that would have travelled furthest.** I reported 4.0x
 from n=15. Bootstrapping that sample afterwards gives a 95% interval of [2.36, 7.42],
 which is not a measurement, it's a rumour with a decimal point. Re-running at n=100 gave
-3.60x [3.00, 4.35]. But the useful correction isn't the tighter number. It's that a
+3.60x [3.00, 4.36]. But the useful correction isn't the tighter number. It's that a
 verbosity test showed the same setting costing 38.5x on a terse prompt, because the ratio
 is roughly (thinking + answer) / answer and therefore governed by how long the answer
 would have been anyway. I was about to hand someone a constant that was actually a
@@ -1529,6 +1575,48 @@ table: it doesn't matter enough to check, so nobody checks it, so it stays.
 The habit I'd take forward is narrow. Any number I'm about to put in front of someone else
 either comes with an interval, a committed file it can be regenerated from, or a named
 source I actually queried. Three of the six above would have failed that test on sight.
+
+## Then I stopped trusting myself and checked all of them
+
+Six corrections in two days is a rate, not an accident, so I went back and re-derived
+every headline figure in this document from the raw records rather than re-reading the
+prose. Re-reading had already failed to catch any of the six, which makes sense: a stale
+number reads exactly like a fresh one.
+
+That pass found five more.
+
+**The cost model was built on a sample I'd publicly retired.** Every dollar figure in
+section 5 traced back to an n=15 run whose confidence interval I quote three paragraphs
+above as an example of a sample too small to use. It was still quietly the basis for the
+annual projections, understating the ungrounded unit cost by 30% and reporting the
+grounded multiplier as 123x when the n=100 data says 95x. Rebased.
+
+**The bootstrap wasn't reproducible.** `scripts/confidence.py` takes a seed, so I assumed
+it was deterministic. It iterated a *set* of brand names, and Python randomises string
+hashing per process, so the resamples were drawn in a different order on every run and
+the published intervals moved by a point or two each time. Three runs, three answers, all
+from the same seed and the same data. One `sorted()` fixed it.
+
+**A confidence table was showing its top 8 rows.** Exactly the shape of the truncation
+bug that produced the Neato story, in the script written to prevent that class of
+mistake. Anker's interval was quoted in the prose while the script that produced it
+never printed Anker.
+
+**Two unit slips.** A "$3.14 per sample" figure that reconciled against no rate I have
+ever used, and a brand count that silently switched between distinct names and
+category/brand pairs between adjacent paragraphs.
+
+**And I made a seventh live, then caught it.** Recomputing the production unit's cost, I
+added the grounding SKU to per-request costs that already included it and produced $6.17
+for a run that cost $3.67. I'd written the corrected figure into the document before the
+arithmetic stopped agreeing with itself.
+
+The fix is `scripts/verify_findings.py`. It re-derives 66 figures from the committed
+records and exits non-zero when the document disagrees, so drift fails a check instead of
+sitting in prose. It caught one on its first run: a p50 quoted with a different estimator
+than every other latency number here.
+
+`make verify` runs it. It found the seventh error faster than I did, which is the point.
 
 ---
 

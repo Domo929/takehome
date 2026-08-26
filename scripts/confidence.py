@@ -139,7 +139,11 @@ def main() -> None:
         print(f"\n  Brand share, 95% CI on the difference (n={len(g)} per arm)")
         gb = [brands(r["answer"]) for r in g]
         ub = [brands(r["answer"]) for r in u]
-        names = {b for s in gb + ub for b in s}
+        # sorted(), not a bare set. Python randomises string hashing per process, so
+        # iterating a set of brand names consumes rng draws in a different order on
+        # every run and the intervals move by a point or two each time, seed or no
+        # seed. FINDINGS quotes these, so they have to be reproducible.
+        names = sorted({b for s in gb + ub for b in s})
         deltas = []
         for name in names:
             gk = sum(1 for s in gb if name in s)
@@ -153,7 +157,10 @@ def main() -> None:
             )
             lo, hi = draws[50], draws[-51]
             deltas.append((gk / len(g) - uk / len(u), name, gk, uk, lo, hi))
-        for d, name, gk, uk, lo, hi in sorted(deltas, key=lambda x: -abs(x[0]))[:8]:
+        # Every brand that cleared the n>=10 floor, not a top-N slice. A truncated
+        # list is what produced the Neato story in Appendix B, and FINDINGS quotes
+        # intervals from here, so anything it might quote has to be printed.
+        for d, name, gk, uk, lo, hi in sorted(deltas, key=lambda x: -abs(x[0])):
             sig = "" if lo <= 0.0 <= hi else "  significant"
             print(f"    {name:<12} {uk:>3}% -> {gk:>3}%   delta {d:+.0%} "
                   f"[{lo:+.0%}, {hi:+.0%}]{sig}")

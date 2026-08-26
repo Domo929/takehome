@@ -108,6 +108,13 @@ logprobs: ## Measure what logprobs add on top of 100-sample counting
 spend: ## Report actual spend to date, split by whose account paid
 	@$(PY) scripts/spend_report.py
 
+verify: ## Re-derive every number in FINDINGS from committed data (no spend)
+	@$(PY) scripts/verify_findings.py
+
+verify-all: verify ## Everything checkable offline, plus the vendor rates
+	@$(PY) scripts/verify_pricing.py
+	@$(PY) scripts/confidence.py
+
 cost-model: ## Project cost at a given daily volume (ARGS="--daily 50000")
 	$(PY) scripts/cost_model.py $(ARGS)
 
