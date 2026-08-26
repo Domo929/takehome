@@ -54,13 +54,21 @@ def _k6_rows() -> list[dict]:
             continue
         if "target" not in m or "cost_usd" not in m:
             continue
-        if m.get("target") != "vertex":
+        # Two shapes reach here. A k6 run pointed straight at the vendor knows its own
+        # target. A run through our service does not, because the backend is behind
+        # the service, so service.js asks /health at setup and records `billable`.
+        # Without that a real $0.76 through the service was invisible to this ledger,
+        # which is the same class of error as counting a mock run as spend.
+        if m.get("target") == "service":
+            if m.get("billable") is not True:
+                continue
+        elif m.get("target") != "vertex":
             continue  # mock-backed rehearsal, modelled dollars, nothing spent
         rows.append(
             {
                 "label": f.stem,
                 "backend": "vertex",
-                "location": "-",
+                "location": m.get("service_url") and "via service" or "-",
                 "model": m.get("model", "-"),
                 "requests": m.get("requests", 0),
                 "cost": m.get("cost_usd", 0.0),
@@ -166,7 +174,11 @@ def main() -> None:
     # runs is what made the original number wrong.
     grounded = 0
     shortfall = 0.0
-    for f in sorted((REPO / "results").rglob("*-manifest.json")):
+    # k6 summaries do not use the -manifest suffix, and a grounded run through the
+    # service issues real SKU prompts just like a direct one.
+    for f in sorted((REPO / "results").rglob("*-manifest.json")) + sorted(
+        (REPO / "results").rglob("k6-*.json")
+    ):
         try:
             m = json.loads(f.read_text())
         except json.JSONDecodeError:

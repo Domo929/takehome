@@ -232,6 +232,20 @@ def main() -> int:
     check("Tier 1 sustained rps", round(2e6 / blended / 60), 91)
     check("Tier 3 sustained rps", round(10e6 / blended / 60), 456)
 
+    prod = json.loads((REPO / "results/real/capacity/k6-production-shape.json").read_text())
+    check("production shape: usable samples", round(prod["usable_sample_rate"] * 100, 1), 100.0)
+    check("production shape: truncated", prod["truncated_responses"], 0)
+    check("production shape: grounding degraded", prod["grounding_degraded"], 0)
+    check("production shape: shed 503", prod["service_rejected_503"], 35)
+    check("production shape: rate limited", prod["rate_limited"], 0)
+    check("production shape: billable", prod["billable"], True)
+    check("production shape: p99 ms", round(prod["latency_ms"]["p99"]), 39058, tol=1)
+    served = prod["requests"] + prod["service_rejected_503"]
+    check("production shape: shed %", round(prod["service_rejected_503"] / served * 100, 1), 3.2)
+    # The tail is what drove the shedding, so the arithmetic behind that claim is
+    # pinned too.
+    check("concurrency needed at p99", round(9 * prod["latency_ms"]["p99"] / 1000), 352, tol=1)
+
     mp = json.loads((REPO / "results/real/local/multiprocess-experiment.json").read_text())
     check("1 process at c=512", round(mp["control_one_process_c512"]["rps"], 1), 67.0)
     check("4 processes combined", round(mp["combined_rps"], 1), 307.1)

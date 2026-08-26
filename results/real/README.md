@@ -97,3 +97,19 @@ Three supporting runs, all free, narrow down what the real constraint is:
   concurrent against it at 400 rps with a clean p50.
 - `local/multiprocess-experiment.json` is the one that matters. The same 512 concurrent
   requests give 67 rps through one process and 307 rps through four.
+
+## The production-shape run
+
+`capacity/k6-production-shape.json` is the one that runs what Evertune would actually
+run: k6 through `service/app.py` on 4 workers to real Vertex, both conditions mixed
+50/50, production output cap of 1,536, one prompt sampled repeatedly rather than a
+stream of distinct ones.
+
+It exists because every other capacity run here tests one piece in isolation, and
+several of them report HTTP success on an arm that truncates most of its answers. This
+one reports the number that matters instead: 100% of served requests produced a usable
+sample, meaning the answer finished and arrived in the condition it was requested in.
+
+The finding is in the 3.2% that were shed. Grounded p99 is 39 seconds against a p50 of
+8, so the tail needs 352 concurrent requests where the mean needs 74. Capacity was 128.
+Mean-based sizing under-provisions this workload by about 3x.

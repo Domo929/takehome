@@ -10,7 +10,7 @@ exits non-zero if this document disagrees with its own data, so any number here 
 checked in a few seconds without spending a cent. Appendix B covers how that came about
 and what it caught.
 
-Total spend on `evertune-tests`: **$54.63 across 127,340 requests**. Run
+Total spend on `evertune-tests`: **$55.39 across 128,414 requests**. Run
 `python scripts/spend_report.py` for the breakdown.
 
 ---
@@ -1273,6 +1273,69 @@ question for whoever owns that policy rather than for me. The provider takes `lo
 from configuration, so it's a config change and no code. I've left the default at
 `us-central1` so every measurement here stays comparable, and flagged it rather than
 quietly switching it underneath the evidence.
+
+### Running the actual production shape, end to end
+
+Everything above tests one piece at a time. None of it runs the thing Evertune would
+actually run, which is: through our service, both conditions mixed, production output
+caps, and the same prompt sampled repeatedly rather than a stream of different ones.
+
+So I ran that (`results/real/capacity/k6-production-shape.json`). k6 to
+`service/app.py` on 4 uvicorn workers to real Vertex, 9 requests per second offered for
+two minutes, 50/50 grounded, cap 1,536, temperature 1.0, one prompt repeated.
+
+| | |
+|---|---|
+| Offered | 1,109 |
+| Served | 1,074 |
+| **Shed with 503** | **35 (3.2%)** |
+| Rate limited by Vertex | 0 |
+| Grounded share achieved | 49% |
+| Grounding silently degraded | **0** |
+| Truncated at 1,536 | **0** |
+| **Usable samples** | **100.0%** |
+| Cost | $0.76 |
+
+**Every served request produced a countable sample.** No truncation, no silent
+degradation, no answer arriving in the wrong condition. That is the number the earlier
+runs could not produce, because they measured HTTP success on an arm that truncates 71%
+of the time at a 64-token cap. At the production cap the grounded arm does not truncate
+at all, which also confirms the 1,536 recommendation from section 1 was right.
+
+The interesting part is the 3.2% that never got in.
+
+| | |
+|---|---|
+| End-to-end p50 | 8,179 ms |
+| p90 | 20,182 ms |
+| p99 | **39,058 ms** |
+| Our overhead p50 | **0.38 ms** |
+| Queue wait p99 | **0 ms** |
+| Vertex p50 | 8,593 ms |
+
+Our overhead is still a third of a millisecond and the queue never formed, so the
+shedding is admission control working rather than a system falling over. What drove it
+is the tail. Little's Law again:
+
+| At 9 rps and this latency | Concurrent requests needed |
+|---|---|
+| p50, 8.2 s | 74 |
+| p90, 20.2 s | 182 |
+| **p99, 39.1 s** | **352** |
+
+Capacity was 128, so the mean fits comfortably and the tail does not. **Grounded latency
+has a tail long enough that mean-based capacity planning under-provisions by 3x.** Sizing
+on the p50 would have looked fine and shed traffic in production.
+
+Two things follow. Capacity for a mixed workload has to be sized on the grounded p99,
+not the blended mean, which is roughly 5x more headroom than the average suggests. And
+the ad-hoc burst case in section 5 is the one to watch, because a report kicked off by a
+click arrives all at once against exactly this latency profile.
+
+Worth noting what this run does not show. Two minutes is not a soak, 1,074 requests is
+not a report, and 9 rps was chosen to bound cost rather than to find a limit. Vertex
+never pushed back: 138k tokens per minute, about 7% of the entry-tier baseline. The
+constraint here was ours again, and this time it was deliberate.
 
 ### So what is the constraint, exactly?
 
