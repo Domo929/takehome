@@ -249,6 +249,15 @@ def main() -> int:
             failures.append(f"cited file missing: {path}")
     check("every cited evidence file exists", [f for f in failures if "cited file" in f], [])
 
+    # The table of contents is the first thing a reader touches, so a dead anchor
+    # there is worse than a wrong number buried on page 30.
+    def slug(h: str) -> str:
+        return re.sub(r"\s+", "-", re.sub(r"[^\w\s-]", "", h.lower()).strip())
+
+    heads = {slug(m.group(2)) for m in re.finditer(r"^(#{1,4}) (.+)$", text, re.M)}
+    broken = sorted(set(re.findall(r"\]\(#([a-z0-9-]+)\)", text)) - heads)
+    check("every anchor link resolves", broken, [])
+
     print()
     print(f"{checks} checks, {len(failures)} failed")
     if failures:

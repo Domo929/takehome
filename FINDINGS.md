@@ -14,6 +14,28 @@ Total spend on `evertune-tests`: **$53.33 across 127,340 requests**. Run
 
 ---
 
+## Where to find what you asked for
+
+It is a long document, so here is the map. The left column is the brief.
+
+| You asked for | It's in |
+|---|---|
+| How the integration behaves under realistic load | [4. Pointing it at Vertex](#4-what-i-learned-pointing-it-at-vertex), and [3](#3-what-i-learned-load-testing-our-own-code) for our own code first |
+| Quirks and failure modes of this model | [1. What I learned about the model](#1-what-i-learned-about-the-model) |
+| Parameters that mattered | Thinking budget and output cap in [1](#1-what-i-learned-about-the-model), temperature in [2](#2-what-i-learned-about-the-measurement) |
+| What surprised me vs other LLMs | [What surprised me, measured against the provider already in this repo](#what-surprised-me-measured-against-the-provider-already-in-this-repo) |
+| Decisions and tradeoffs | [6. Changing the provided contract](#6-changing-the-provided-contract), plus the reasoning inline where each decision was made |
+| Things I tried that didn't work | HTTP/2 in [4](#tls-is-what-costs-us-and-http2-doesnt-fix-it), the adaptive limiter in [4](#adaptive-concurrency-it-works-but-the-premise-is-unproven), structured output in [2](#structured-output-does-not-work-where-it-is-needed-most), context caching in [5](#could-we-pad-the-prompt-to-reach-the-cache-floor) |
+| What I'd do next in production | [7. What I'd do before production](#7-what-id-do-before-production) |
+| What I'd want to know first | [8. Open questions](#8-open-questions) |
+| The numbers behind all of it | [Appendix A](#appendix-a-evidence-and-how-to-check-it), and `make verify` re-derives all 67 |
+| Where I got things wrong | [Appendix B](#appendix-b-what-i-got-wrong-and-the-check-that-would-have-caught-it) |
+
+If you only read one section, read [5. What it costs to run](#5-what-it-costs-to-run).
+It's the finding most likely to change a decision.
+
+---
+
 ## How I worked
 
 I started before my GCP access came through. I already had a personal Gemini Developer
@@ -201,6 +223,60 @@ a knob to turn.
 
 Data in `results/real/model/flash-lite-*`, compared against the temperature 1.0
 cells of `results/real/measurement/temperature-multi-*`.
+
+### What surprised me, measured against the provider already in this repo
+
+`llm/together.py` shipped with the exercise and it is OpenAI-shaped, so it is a fair
+statement of what this codebase already assumes an LLM provider looks like. Every line of
+it has a Gemini equivalent that looks similar and behaves differently. That gap is where
+my time went.
+
+**`response.choices[0].message.content` is a string. Gemini's answer is a list that can
+be empty on a 200.** The text lives in `candidates[0].content.parts[]` and has to be
+joined. A response can arrive with HTTP 200, no error, and no parts at all. The SDK's
+`.text` convenience property *raises* on some blocked payloads rather than returning
+empty, so the happy path has two distinct ways to produce nothing while looking fine.
+This is the single biggest structural difference, and it is why the provider raises
+`LLMEmptyResponseError` instead of handing callers a `None` they did not ask for.
+
+**`response.usage.completion_tokens` is one number. Gemini has two, and the bill is the
+sum.** `candidates_token_count` is the obvious analogue, and it is the wrong one:
+`thoughts_token_count` is billed at the same output rate and is invisible in the answer.
+On the default configuration that is 411 of 534 output tokens, so reading the obvious
+field understates the bill by **3.6x**. Nothing errors. The number just comes out low, and
+it stays low until an invoice disagrees.
+
+**Together's `finish_reason` is available and the shipped code ignores it, which is
+survivable there and is not here.** Gemini truncates at the output cap, and truncation is
+silent: the answer looks like a shorter answer. It ran 3.3% on ungrounded traffic and 44%
+once a search tool was attached. Without checking `finish_reason`, a brand-tracking
+pipeline quietly measures whichever brands happened to fit in the token budget.
+
+**`temperature` passes straight through in both, and only one of them cares.** At
+temperature 0 Gemini stops being able to express a share at all: 0 of 103 brands landed
+between 10% and 90%. The parameter looks identical in both APIs and is a measurement
+decision in one of them.
+
+**`parallelism()` returns a constant, and Vertex publishes no per-project ceiling to put
+in it.** Capacity is drawn from a shared regional pool and metered in tokens per minute
+at the organisation level. There is no per-project QPS number to look up and no quota
+increase to request. Both of those are things an OpenAI-shaped integration expects to
+find.
+
+**And one thing has no analogue at all.** Grounding is a separate SKU billed per prompt,
+not per token, at 94x the token cost of the request it attaches to. Every cost intuition
+carried over from a token-priced API is wrong by two orders of magnitude on that arm. It
+is also why Batch and context caching, the two obvious levers, do nothing here.
+
+Two smaller ones worth recording because they cost me time. One field inside
+`thinkingConfig` serialises in snake_case while every sibling is camelCase, and sending
+both spellings is a hard 400 rather than a merge. And 499 `CANCELLED` has to be treated as
+retryable despite sitting in the 4xx range where client errors live.
+
+The through-line: Gemini's failure modes are mostly **HTTP 200 responses that are wrong in
+a way the type system cannot see.** An OpenAI-shaped client ported field by field compiles,
+runs, passes a smoke test, and misreports cost and truncation in production. That is what
+`tests/test_gemini.py` exists to pin.
 
 ## 2. What I learned about the measurement
 
