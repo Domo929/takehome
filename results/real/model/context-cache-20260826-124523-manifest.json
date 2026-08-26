@@ -1,0 +1,35 @@
+{
+  "experiment": "context-cache",
+  "question": "does implicit caching engage above 2,048 input tokens?",
+  "started_utc": "2026-08-26T18:43:57Z",
+  "duration_s": 85.4,
+  "project": "evertune-tests",
+  "location": "us-central1",
+  "model": "gemini-2.5-flash",
+  "requests": 40,
+  "arms": [
+    {
+      "arm": "above_floor",
+      "n": 20,
+      "mean_input_tokens": 1641.0,
+      "requests_with_cache_hit": 0,
+      "mean_cached_tokens_when_hit": 0,
+      "cached_share_of_input": 0.0,
+      "input_cost_full_rate_usd": 0.009846,
+      "input_cost_billed_usd": 0.009846,
+      "input_saving_pct": 0.0
+    },
+    {
+      "arm": "below_floor",
+      "n": 20,
+      "mean_input_tokens": 485.0,
+      "requests_with_cache_hit": 0,
+      "mean_cached_tokens_when_hit": 0,
+      "cached_share_of_input": 0.0,
+      "input_cost_full_rate_usd": 0.00291,
+      "input_cost_billed_usd": 0.00291,
+      "input_saving_pct": 0.0
+    }
+  ],
+  "modelled_cost_usd": 0.018996
+}

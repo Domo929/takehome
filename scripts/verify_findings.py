@@ -203,6 +203,14 @@ def main() -> int:
     check("flash-lite mean cost", round(statistics.mean(r["cost_usd"] for r in lite), 6), 0.000027)
     check("cost ratio", round(statistics.mean(r["cost_usd"] for r in flash) / statistics.mean(r["cost_usd"] for r in lite), 1), 11.5, tol=0.1)
 
+    print("\nContext caching (section 5)")
+    cc = manifest("results/real/model/context-cache-*-manifest.json")
+    arms = {a["arm"]: a for a in cc["arms"]}
+    check("above-floor arm cleared 2,048", cc["above_arm_cleared_floor"], True)
+    check("above-floor cache hits", arms["above_floor"]["requests_with_cache_hit"], 18)
+    check("above-floor input saving %", arms["above_floor"]["input_saving_pct"], 56.3, tol=0.1)
+    check("below-floor cache hits (control)", arms["below_floor"]["requests_with_cache_hit"], 0)
+
     print("\nCapacity (sections 3 and 4)")
     soak = manifest("results/real/capacity/vertex-soak-long-manifest.json")["stages"][0]
     check("soak requests", soak["requests"], 47677)

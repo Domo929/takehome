@@ -10,7 +10,7 @@ exits non-zero if this document disagrees with its own data, so any number here 
 checked in a few seconds without spending a cent. Appendix B covers how that came about
 and what it caught.
 
-Total spend on `evertune-tests`: **$55.39 across 128,414 requests**. Run
+Total spend on `evertune-tests`: **$55.44 across 128,494 requests**. Run
 `python scripts/spend_report.py` for the breakdown.
 
 ---
@@ -58,7 +58,7 @@ once with live search off and once on. That shape has properties worth knowing b
 it scales, what grounding costs, what temperature does to a brand's measured share,
 what logprobs add on top of counting.
 
-**Build the thing and test it locally.** The integration runs as an HTTP service and k6
+**Build it and test it locally.** The integration runs as an HTTP service and k6
 drives it. I wrote a fake Vertex endpoint that speaks the real wire contract so I could
 find our own bottlenecks for free, and injected failures that a real vendor won't
 produce on demand.
@@ -339,7 +339,7 @@ Which turns every lever into a small number:
 |---|---|---|
 | Thinking off | both token arms | **3.2%** |
 | Batch (50% off) | ungrounded tokens only, batch has no tool support | **0.6%** |
-| Context caching | neither, floor is 2,048 input tokens, workload is 35 | **0%** |
+| Context caching | neither today, floor is 2,048 input tokens and the prompt is 35 | **0%** |
 
 Every token optimisation in this document fights over about 3% of the bill, and the
 single biggest one is worth less than a rounding error on the grounding line. Batch
@@ -367,15 +367,33 @@ forever to unlock a discount worth less than the padding.
 Break-even sits at 350 input tokens. The floor sits at 2,048. So there's a dead band
 between them where caching would pay for itself and Google won't let you use it.
 
-**But this flips if the prompt grows on its own.** Evertune samples the same prompt 100
-times, which is close to the ideal caching workload: one prefix, many hits, all within
-the TTL. If a future prompt carries a long system message, few-shot examples or a brand
-list and lands past 2,048 tokens naturally, implicit caching is already on and would take
-**51% off the request at 2,048 tokens and 65% at 5,000**. Nothing to build, and no reason
-to pad to get there.
+**But this flips if the prompt grows on its own**, and that half I did measure rather
+than assume (`results/real/model/context-cache-*`). Two arms, same prefix repeated, 20
+requests each:
+
+| Arm | Mean input tokens | Requests with a cache hit | Cached per hit | Input saving |
+|---|---|---|---|---|
+| Above the floor | 2,933 | **18 / 20** | 2,038 tokens | **56.3%** |
+| Below the floor | 621 | **0 / 20** | 0 | 0% |
+
+Caching engages, it engages only above the floor, and the discount is real: 56% off the
+input side. The two misses in the top arm are the first request, which warms the prefix,
+and one later blip. Nothing to build, and no reason to pad to get there.
+
+The below-floor arm is the part that makes this a measurement rather than an anecdote.
+Without it, "we saw caching" and "we saw caching *because* the prompt was long enough"
+look identical.
 
 Worth flagging as a trigger rather than an action: if the prompt ever crosses 2,048
-tokens, the cost model in this section changes and should be re-derived.
+tokens, this section's cost model changes and should be re-derived. Evertune samples one
+prompt 100 times, which is close to the ideal shape for caching, so the discount would
+land immediately.
+
+*(First attempt at this got zero hits in both arms and I nearly wrote it up as "caching
+does not engage." The prefix had come out at 1,641 tokens, under the floor, because I
+sized it with the usual four-characters-per-token rule and this prose runs closer to
+five and a half. The script now asserts the arm cleared the floor and says so loudly if
+it did not, because a mis-calibrated run and a real negative look the same.)*
 
 Worth being explicit about what is not on that list: **the model**. Evertune measures
 each model as its own target, so Flash and Flash-Lite are two different measurements
