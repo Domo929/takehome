@@ -66,8 +66,7 @@ billed output was invisible reasoning**.
 
 ### But that multiplier belongs to your prompt, not to the model
 
-Here's the part worth knowing, and I only found it because the number looked wrong next
-to what other people report for the same setting.
+Here's the part worth knowing, and I nearly shipped the number without it.
 
 The ratio is roughly *(thinking + answer) / answer*. So it's governed by how long your
 answer would have been anyway. Ask something that produces two words and thinking
@@ -904,12 +903,15 @@ the rest.
 
 Headline ratios carry bootstrap intervals and small-n results say so.
 
-The thinking ratio is worth a note. I originally ran it at n=15 per config and reported
-4.0x, which looked out of line when I cross-checked against how other people measure the
-same setting. Two things came out of re-running it at n=100: the point estimate barely
-moved (3.60x, CI [3.00, 4.35]) but the interval tightened enormously — the n=15 version
-had a CI of [2.36, 7.42], which is not a measurement, it's a range containing most
-plausible answers.
+The thinking ratio is worth a note. I originally ran it at n=15 per config and quoted
+4.0x without an interval. Putting one on it was sobering: **[2.36, 7.42]**. That is not
+a measurement, it is a range containing most plausible answers, and I had been treating
+it as a fact. Re-running at n=100 moved the point estimate barely (3.60x) and tightened
+the interval to [3.00, 4.35], which is finally usable.
+
+The lesson I'd keep: a point estimate with no interval hides how little you know, and
+n=15 against a quantity with a standard deviation of 223 tokens was never going to
+settle anything.
 
 I'd also written that the ratio couldn't be bootstrapped because manifests store
 per-stage totals. That was wrong; the per-request ledgers were sitting in the same
